@@ -50,7 +50,8 @@ write_lock(int action, int host_id) {
             set_is_locked(IDLE); // set the state to IDLE
             return true;
         }
-        else if (get_lock_status() == IDLE && thread_id == -1) {
+        // If the host_id is -1, then override the lock and reset it.
+        else if (get_lock_status() == IDLE && host_id == -1) {
             // override the lock!
             set_who_locked(-1);
             set_is_locked(IDLE); // set the state to IDLE
@@ -82,13 +83,31 @@ write_proposed_entry(int host_id, struct table_entry *entry) {
 }
 // We need a voter!
 void vote_entry(int host_id, int vote) {
-    // check if this host can vote?
-    if ()
-    *count += 1;
+    // check if this host can vote? The host id array is a flat table with set
+    // and unset values.
+    if (get_participant_host_ids(host_id) != 0)
+        *count += 1;
+    else
+        // This host is not allowed to vote. create an interrupt?
+        fatal("This host %d is not allowed to vote!", host_id);
 }
+
 // We need a function to create a new entry and wait until it gets approved by
 // everyone.
-bool create_and_wait_to_get_access(int host_id, struct table_entry);
+bool create_and_wait_to_get_access(int host_id, struct table_entry entry) {
+    // This is the most complicated function IMHO
+    if (write_proposed_entry(host_id, entry) == true) {
+        // wait until voting is done.
+        while (*count <= get_participant_count() / 2) {
+            // wait until voting is done. How????
+            // TODO: Add a timeout condition.
+        }
+        return true;
+    }
+    else
+        return false;
+}
+
 // Finally we need an unlock function to unlock the metadata.
 bool unlock(int host_id) {
     if (get_is_locked() == WRITE && get_who_locked() == host_id) {
@@ -152,11 +171,26 @@ void set_participant_host_ids(size_t index) {
     // index is the host_id
     participant_host_ids[index] = true;
 }
-struct table_entry* get_proposed_entry();
-void set_proposed_entry(struct table_entry* entry);
-int get_count();
+struct table_entry* get_proposed_entry() {
+    return proposed_update;
+}
+
+void set_proposed_entry(struct table_entry* entry) {
+    assert(false && "call write_proposed_entry\n");
+}
+int get_count() {
+    return *count;
+}
 // Sets an integer to vote. Is in between 0 and 1.
-void set_count(int my_count);
+void set_count(int my_count) {
+    if (my_count > 0)
+        *count += 1;
+}
+
+int reset_count() {
+    *count = 0;
+}
+
 struct table_entry* get_permission_table(int host_id);
 
 // All the getter functions should work now.

@@ -56,7 +56,9 @@ ______________________________________ .. _____________________________ .. ____
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <omp.h>
+#include <assert.h>
+
+#include "utility.hh"
 
 // Typedefs are here. 
 typedef uint64_t Addr;
