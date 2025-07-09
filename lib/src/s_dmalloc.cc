@@ -13,7 +13,7 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     if (test_mode == 0)
         start_address = dmalloc(size, host_id);
     else if (test_mode == 1)
-        start_address = smalloc(size, host_id);
+        start_address = shmalloc(size, host_id);
     else
         // Illegal operation
         fatal("Cannot create memory region without a valid test mode (%d)",
@@ -25,6 +25,8 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     // make sure to define the data_start_address and make sure that the user
     // has no access to the data_start_address.
     int *data_start_address = NULL;
+    // make sure that is_allowed is set to false
+    bool is_allowed = false;
     // Now make sure that this host has permissions to access the memory.
     // First, if I am host 0, then I'll have permission if the participant host
     // count is 0.
@@ -39,6 +41,7 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // before. Therefore, we need to request permissions again to make sure
         // that I am legally allowed in!
         // TODO
+        fatal("NotImplementedError!");
     }
     else if (get_participant_count() == 0 && host_id > 0) {
         // I am the first one here but I am not the primary host. This makes it
@@ -53,6 +56,7 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // proposing a new entry. While others vote, I wait. If the voting goes
         // through, I'll enter my proposed entry into the permission table.
         // TODO
+        fatal("NotImplementedError!");
     }
     else {
         // This is an unhandled exception! We'll crash the program here!
@@ -67,7 +71,9 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     // This is a variable stored in the local memory of the node. This is also
     // returned to the user making sure that the copy of the permission table
     // and the data start address is copied to the host as well.
-    global_addr_ = (struct table_entry *) malloc (sizeof(struct table_entry));
+    struct s_dmalloc_entry *global_addr_ = (struct s_dmalloc_entry *)
+                                    malloc (sizeof(struct s_dmalloc_entry));
+    // these variable are now global.
     global_addr_->start_address = start_address;
     global_addr_->data_start_address = data_start_address;
     global_addr_->permissions = permissions;
@@ -77,6 +83,8 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
 
 void
 create_head(int host_id, int permissions, bool verbose) {
+    // We need to make sure that the global_addr_ is not null. Why?
+    assert(global_addr_ != NULL);
     // This function only creates the head. Must have the host_id as 0 as the
     // first host who wants to create the sharing range must call this
     // function. However, exception can happen when everyone else left the
@@ -122,6 +130,11 @@ create_head(int host_id, int permissions, bool verbose) {
     else {
         fatal("Cannot create head! There are others using the shared memory.");
     }
+}
+
+void
+create_interrupt() {
+    fatal("Interrupt is not implemented!");
 }
 
 int*

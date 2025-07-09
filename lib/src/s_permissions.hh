@@ -94,6 +94,8 @@ struct s_dmalloc_entry {
 // Hardcoded sections. Max number of participant hosts is 1024
 // FIXME:
 #define MAX_PARTICIPANT_COUNT 1024
+// The head is hardcoded to 1G of memory.
+#define TABLE_SIZE 0x40000000
 // Define the offsets
 #define IS_LOCKED 0
 #define WHO_LOCKED sizeof(int)
@@ -149,7 +151,7 @@ int get_participant_count();
 void set_participant_count(int participant_count);
 // Returns the integer stored at the index offset
 int get_participant_host_ids(size_t index);
-void set_participant_host_ids(int host_id, size_t index);
+void set_participant_host_ids(size_t index);
 struct table_entry* get_proposed_entry();
 void set_proposed_entry(struct table_entry* entry);
 int get_count();
