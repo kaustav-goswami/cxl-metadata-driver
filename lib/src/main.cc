@@ -11,6 +11,7 @@ struct simple {
 };
 
 int main() {
+    munmap_memory(1, 1, 0);
     struct s_dmalloc_entry *sptr = secure_alloc(1, 0, 1, 1, true);
 
     if (sptr->data_start_address == NULL) {

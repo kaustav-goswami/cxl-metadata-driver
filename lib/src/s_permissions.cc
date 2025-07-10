@@ -3,7 +3,7 @@
 // define all the global variables that are used to manage the shared memory
 // region. These are all undefined in the header file.
 struct s_dmalloc_entry *global_addr_;
-bool verbose;                    // verbose is set by the parent
+bool verbose = false;                    // verbose is set by the parent
                                  // function
 int* is_locked;                  // assigning is locked as a variable
 int* who_locked;                 // similar
@@ -17,7 +17,7 @@ int permission_table_index;
 
 
 void
-assign_all_global_variables(int* start_address) {
+assign_all_global_variables(int* start_address, bool this_verbose) {
     // We don't need the host_id tp assign the global variables. Instead, we
     // need the start address of the mmapped region
     is_locked = &start_address[IS_LOCKED];
@@ -29,7 +29,7 @@ assign_all_global_variables(int* start_address) {
     count = &start_address[COUNT];
     permission_table =
                     (struct table_entry*) &start_address[COUNT + sizeof(int)];
-
+    verbose = this_verbose;
     // Do we need the setter functions now?..
 }
 
@@ -69,6 +69,12 @@ write_lock(int action, int host_id) {
         // If the host_id is -1, then override the lock and reset it.
         else if (get_lock_status() == IDLE && host_id == -1) {
             // override the lock!
+            set_who_locked(-1);
+            set_is_locked(IDLE); // set the state to IDLE
+            return true;
+        }
+        // if the lock is undefined
+        else if ((get_lock_status() < IDLE || get_lock_status() > WRITE) && host_id == -1) {
             set_who_locked(-1);
             set_is_locked(IDLE); // set the state to IDLE
             return true;
@@ -279,6 +285,8 @@ bool remove_proposed_entry(int host_id) {
 
     // unlock the lock
     unlock(host_id);
+
+    return true;
 }
 
 int get_permission_table_count() {

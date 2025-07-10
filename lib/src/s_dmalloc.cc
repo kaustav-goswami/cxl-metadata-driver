@@ -4,7 +4,7 @@
 
 struct s_dmalloc_entry*
 secure_alloc(size_t size, int host_id, int permissions, int test_mode,
-                                                                bool verbose) {
+                                                                bool this_verbose) {
     // Simple step here is to create a s_dmalloc_entry to store the start
     // addresses and the permissions.
     
@@ -18,19 +18,33 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // Illegal operation
         fatal("Cannot create memory region without a valid test mode (%d)",
                 test_mode);
+    // info("global_verbose: %d, verbose: %d, start_address: %p, size: %zu, host_id: %d",
+            // verbose, this_verbose, start_address, size, host_id);
     // Since this is the first time anyone is calling this function from this
     // host, make sure that the global variables are setup and the start
     // addresses aren't passed around functions.
-    assign_all_global_variables(start_address);
+    assign_all_global_variables(start_address, this_verbose);
     // make sure to define the data_start_address and make sure that the user
     // has no access to the data_start_address.
     int *data_start_address = NULL;
     // make sure that is_allowed is set to false
     bool is_allowed = false;
+    // This is a variable stored in the local memory of the node. This is also
+    // returned to the user making sure that the copy of the permission table
+    // and the data start address is copied to the host as well.
+    global_addr_ = (struct s_dmalloc_entry *)
+                                    malloc (sizeof(struct s_dmalloc_entry));
+    // these variable are now global.
+    global_addr_->start_address = start_address;
+    global_addr_->permissions = permissions;
+
     // make sure that the participant count is set to 0 if I am the first host.
     if (get_participant_count() <= 0) {
         // This is the first host who is trying to create the head.
         set_participant_count(0);
+    }
+    if (verbose) {
+        printf("global_addr_ %#lx is null %d", (unsigned long) global_addr_, global_addr_ == NULL);
     }
     // Now make sure that this host has permissions to access the memory.
     // First, if I am host 0, then I'll have permission if the participant host
@@ -46,7 +60,8 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // before. Therefore, we need to request permissions again to make sure
         // that I am legally allowed in!
         // TODO
-        fatal("NotImplementedError!");
+        fatal("NotImplementedError! Host %d is 0 and trying to create a head "
+                "but there are other participants in the system. ", host_id);
     }
     else if (get_participant_count() == 0 && host_id > 0) {
         // I am the first one here but I am not the primary host. This makes it
@@ -61,7 +76,8 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // proposing a new entry. While others vote, I wait. If the voting goes
         // through, I'll enter my proposed entry into the permission table.
         // TODO
-        fatal("NotImplementedError!");
+        fatal("NotImplementedError! Host %d is trying to create a head "
+                "but there are other participants in the system. ", host_id);
     }
     else {
         // This is an unhandled exception! We'll crash the program here!
@@ -69,26 +85,25 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
                 "Info: participant count %d and host_id %d",
                 get_participant_count(), host_id);
     }
+
+    if (verbose || this_verbose) {
+        info("verbose: %d, count: %d, host_id: %d, permissions: %d allowed: %d",
+            verbose, get_participant_count(), host_id, permissions, is_allowed);
+    }
     // The data segment of the flat memory will always start after 1 GiB. Why?
     if (is_allowed == true)
         data_start_address = start_address + TABLE_SIZE;
-    
-    // This is a variable stored in the local memory of the node. This is also
-    // returned to the user making sure that the copy of the permission table
-    // and the data start address is copied to the host as well.
-    struct s_dmalloc_entry *global_addr_ = (struct s_dmalloc_entry *)
-                                    malloc (sizeof(struct s_dmalloc_entry));
-    // these variable are now global.
-    global_addr_->start_address = start_address;
     global_addr_->data_start_address = data_start_address;
-    global_addr_->permissions = permissions;
 
     return global_addr_;
+    
 }
 
 void
 create_head(int host_id, int permissions, bool verbose) {
     // We need to make sure that the global_addr_ is not null. Why?
+    printf("create_head: global_addr_ %#lx is null %d\n",
+            (unsigned long) global_addr_, global_addr_ == NULL);
     assert(global_addr_ != NULL);
     // This function only creates the head. Must have the host_id as 0 as the
     // first host who wants to create the sharing range must call this
@@ -98,7 +113,10 @@ create_head(int host_id, int permissions, bool verbose) {
     if (host_id == 0 || (get_participant_count() == 0 && host_id > 0)) {
         // The head can be created here
         // Create the initial entry at the start of the metadata
-        write_lock(IDLE, -1);
+        while (write_lock(IDLE, -1) != true) {
+            // wait until the lock is acquired. This is done to handle
+            // exceptions.
+        };
         // now lock the memory for me.
         while (write_lock(WRITE, host_id) != true) {
             // wait until the lock is acquired. This is done to handle
@@ -123,7 +141,7 @@ create_head(int host_id, int permissions, bool verbose) {
         entry->shared_mask = 1;
         // TODO: This entry will go through. The FAM must create this entry and
         // update the index.
-        set_proposed_entry(entry);
+        write_proposed_entry(host_id, entry);
 
         // that's it! Now unlock the memory
         unlock(host_id);

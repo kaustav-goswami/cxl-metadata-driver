@@ -129,13 +129,13 @@ extern int permission_table_index;
 // can manage this memory better. This is the management structure defined in
 // the beginning. Regardless whoami, the metadata always has read permissions
 // to any new host.
-void assign_all_global_variables(int* start_address);
+void assign_all_global_variables(int* start_address, bool this_verbose);
 // what's the current status of the lock?
 int get_lock_status();
 // We first need a lock writer.
 bool write_lock(int action, int host_id);
 // Then we need a data writer
-bool write_proposed_entry(int host_id, struct table_entry entry);
+bool write_proposed_entry(int host_id, struct table_entry *entry);
 // We need a voter!
 void vote_entry(int host_id, int vote);
 // The FAM needs to reset the vote counter after moving the entry from the
