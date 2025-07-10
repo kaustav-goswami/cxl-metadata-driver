@@ -1,5 +1,5 @@
-#ifndef __DMALLOC_H__
-#define __DMALLOC_H__
+#ifndef __S_DMALLOC_H__
+#define __S_DMALLOC_H__
 
 // This file is taken from simple-graph to allocate memory for the graph
 // software. It understands master and worker to make sure that the clients are

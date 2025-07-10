@@ -77,11 +77,14 @@ struct table_entry {
     // The context ID (aka PCID, set of PCID or a VMID)
     int domain_id;
     // The permission bit. This only needsto be either a read or a write. Papge
-    // permissions already has an execute bit, which we can simply ignote in
+    // permissions already has an execute bit, which we can simply ignore in
     // the hardware.
     bool permission;
     // The hosts who share this memory segment.
     int shared_mask;
+    // Here are a couple of more bits to assign dirty and valid bits
+    bool is_dirty;
+    bool is_valid;
 };
 
 // Define the secured structure of the pointer to the mmaped regions
@@ -96,6 +99,8 @@ struct s_dmalloc_entry {
 #define MAX_PARTICIPANT_COUNT 1024
 // The head is hardcoded to 1G of memory.
 #define TABLE_SIZE 0x40000000
+// FAM needs to have a fixed ID
+#define FAM_ID -2
 // Define the offsets
 #define IS_LOCKED 0
 #define WHO_LOCKED sizeof(int)
@@ -105,7 +110,7 @@ struct s_dmalloc_entry {
 #define COUNT (PROPOSED_UPDATE + sizeof(int))
 
 // we need a bunch of global variables that manages the memory
-extern s_dmalloc_entry *global_addr_;   // Manages the start addresses*
+extern struct s_dmalloc_entry *global_addr_;   // Manages the start addresses*
 extern bool verbose;                    // verbose is set by the parent
                                         // function
 extern int* is_locked;                  // assigning is locked as a variable
