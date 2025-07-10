@@ -27,6 +27,11 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     int *data_start_address = NULL;
     // make sure that is_allowed is set to false
     bool is_allowed = false;
+    // make sure that the participant count is set to 0 if I am the first host.
+    if (get_participant_count() <= 0) {
+        // This is the first host who is trying to create the head.
+        set_participant_count(0);
+    }
     // Now make sure that this host has permissions to access the memory.
     // First, if I am host 0, then I'll have permission if the participant host
     // count is 0.
@@ -60,8 +65,8 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     }
     else {
         // This is an unhandled exception! We'll crash the program here!
-        fatal("Unhandled exception while creating the head! \
-                Info: participant count %d and host_id %d",
+        fatal("Unhandled exception while creating the head! "
+                "Info: participant count %d and host_id %d",
                 get_participant_count(), host_id);
     }
     // The data segment of the flat memory will always start after 1 GiB. Why?
