@@ -88,8 +88,35 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // proposing a new entry. While others vote, I wait. If the voting goes
         // through, I'll enter my proposed entry into the permission table.
         // TODO
-        fatal("NotImplementedError! Host %d is trying to create a head "
+        info("NotImplementedError! Host %d is trying to create a head "
                 "but there are other participants in the system. ", host_id);
+        // Let's try to implement this case
+        // I am host 1. Host 0 has already created the head. I need to
+        // propose an entry and wait until the voting is done.
+        struct table_entry *entry = 
+                    (struct table_entry *) malloc (sizeof(struct table_entry));
+        entry->domain_id = 1;
+        entry->permission = permissions;
+        entry->shared_mask = 1; // this is a shared memory
+        entry->is_valid = 1; // this is a valid entry. this notifies
+                             // the FAM to create this entry in the permission
+                             // table.
+        // Now, I need to write this entry to the proposed section.
+        if (write_proposed_entry(host_id, entry) == true) {
+            // Now, I need to wait until the voting is done.
+            while (get_count() <= get_participant_count() / 2) {
+                // wait until voting is done. How????
+            }
+            info("Voting is done for host %d. Now moving the proposed entry "
+                    "to the permission table.", host_id);
+        }
+        else {
+            // This means that the entry was not written to the proposed section.
+            // This is an error!
+            fatal("Failed to write the proposed entry for host %d", host_id);
+        }
+        // Now figure out the pointers to the shared memory section.
+        is_allowed = true;
     }
     else {
         // This is an unhandled exception! We'll crash the program here!

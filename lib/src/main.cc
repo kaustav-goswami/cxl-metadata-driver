@@ -26,10 +26,16 @@ struct simple {
     int *other_addr;
 };
 
-int main() {
+int main(int argc, char **argv) {
     // munmap_memory(1, 1, MY_HOST_ID);
+
+    // if there areguments
+    int my_host_id = MY_HOST_ID;
+    if (argc > 1) {
+        my_host_id = atoi(argv[1]);
+    }
     const size_t size = 1; // size of the memory to allocate
-    struct s_dmalloc_entry *sptr = secure_alloc(size, MY_HOST_ID, 1, 1, true);
+    struct s_dmalloc_entry *sptr = secure_alloc(size, my_host_id, 1, 1, true);
 
     if (sptr->data_start_address == NULL) {
         // This means that the data_start_address is not set. This means that

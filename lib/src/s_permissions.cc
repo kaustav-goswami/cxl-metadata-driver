@@ -440,6 +440,11 @@ void monitor_update(int host_id, int* start_address) {
             move_proposed_entry(host_id);
             // reset the proposed entry
             old_entry->is_valid = 0; // reset the valid bit
+            // if this is a new update, set the vote to high number
+            // FIXME:
+            set_count(get_participant_count() / 2 + 1);
+            info("Moved the proposed entry to the permission table by host %d",
+                    get_who_locked());
         }
         sleep(1); // sleep for a while to avoid busy waiting
     }
