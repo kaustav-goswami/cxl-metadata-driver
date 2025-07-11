@@ -4,7 +4,7 @@
 
 struct s_dmalloc_entry*
 secure_alloc(size_t size, int host_id, int permissions, int test_mode,
-                                                                bool this_verbose) {
+                                                        bool this_verbose) {
     // Simple step here is to create a s_dmalloc_entry to store the start
     // addresses and the permissions.
     
@@ -18,12 +18,22 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         // Illegal operation
         fatal("Cannot create memory region without a valid test mode (%d)",
                 test_mode);
-    // info("global_verbose: %d, verbose: %d, start_address: %p, size: %zu, host_id: %d",
-            // verbose, this_verbose, start_address, size, host_id);
     // Since this is the first time anyone is calling this function from this
     // host, make sure that the global variables are setup and the start
     // addresses aren't passed around functions.
     assign_all_global_variables(start_address, this_verbose);
+    // If I am the FAM, then don't worry about setting the head.
+    if (host_id == FAM_ID) {
+        // This is the FAM, so we can set the permissions to 1.
+        global_addr_ = (struct s_dmalloc_entry *)
+                                    malloc (sizeof(struct s_dmalloc_entry));
+        // these variable are now global.
+        global_addr_->start_address = start_address;
+        // ignore
+        global_addr_->permissions = permissions;
+        global_addr_->data_start_address = NULL;
+        return global_addr_;
+    }
     // make sure to define the data_start_address and make sure that the user
     // has no access to the data_start_address.
     int *data_start_address = NULL;
@@ -44,7 +54,9 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
         set_participant_count(0);
     }
     if (verbose) {
-        printf("global_addr_ %#lx is null %d", (unsigned long) global_addr_, global_addr_ == NULL);
+        // FIXME:
+        printf("info: global_addr_ %#lx is null %d",
+            (unsigned long) global_addr_, global_addr_ == NULL);
     }
     // Now make sure that this host has permissions to access the memory.
     // First, if I am host 0, then I'll have permission if the participant host
@@ -139,6 +151,7 @@ create_head(int host_id, int permissions, bool verbose) {
         entry->domain_id = 0;
         entry->permission = 1;
         entry->shared_mask = 1;
+        entry->is_valid = 1; // this is a valid entry. this notifies the FAM
         // TODO: This entry will go through. The FAM must create this entry and
         // update the index.
         write_proposed_entry(host_id, entry);
@@ -321,12 +334,15 @@ shmalloc(size_t size, int host_id) {
     int *ptr;
     // PROT_READ/WRITE is enforced here.
     // depending upon the host id, we'll set the read/write permissons.
-    if (host_id == 0) {
+    if (true) {
         ptr = (int *) mmap(NULL, size * ONE_G,
                                     PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     }
     else {
-        // This is a client host.
+        // This is a client host. This is no longer true for the management
+        // of permission tables
+        fatal("shmalloc: This is not a client host. "
+                "This is a management host. Cannot use shmalloc");
         ptr = (int *) mmap(NULL, size * ONE_G, PROT_READ, MAP_SHARED, fd, 0);
     }
     // The map may fail due to several reasons but we notify the user.
@@ -348,7 +364,8 @@ flush_x86_cache(int *_mmap_pointer, size_t size) {
 
     size_t *_start = (size_t *) _mmap_pointer;
     #pragma omp parallel for
-    for (size_t i = 0 ; i < (((size * ONE_G) / sizeof(size_t))) ; i += sizeof(size_t))
+    for (size_t i = 0 ; i < (((size * ONE_G) / sizeof(size_t))) ;
+                                                        i += sizeof(size_t))
         clflushopt((_start) + i);
 }
 

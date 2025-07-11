@@ -11,9 +11,12 @@ int* participant_count;
 int* participant_host_ids;
 struct table_entry* proposed_update;
 int* count;
-struct table_entry* permission_table;
+struct table_entry* permission_table[1024];
 int permission_table_count;
-int permission_table_index;
+int *permission_table_index;
+volatile struct table_entry* monitor_region = NULL;
+volatile uint8_t *shared_region = NULL;
+volatile int *futex_flag = NULL;
 
 
 void
@@ -24,11 +27,11 @@ assign_all_global_variables(int* start_address, bool this_verbose) {
     who_locked = &start_address[WHO_LOCKED];
     participant_count = &start_address[PARTICIPANT_COUNT];
     participant_host_ids = &start_address[PARTICIPANT_HOST_IDS];
-    proposed_update = 
-                        (struct table_entry*) &start_address[PROPOSED_UPDATE];
+    proposed_update = (struct table_entry*) &start_address[PROPOSED_UPDATE];
     count = &start_address[COUNT];
-    permission_table =
-                    (struct table_entry*) &start_address[COUNT + sizeof(int)];
+    permission_table_index = &start_address[INDEX_COUNT];
+    // this is a 2D permissions. Doesn't make any sense. why??
+    *permission_table = (struct table_entry *) &start_address[COUNT + sizeof(int)];
     verbose = this_verbose;
     // Do we need the setter functions now?..
 }
@@ -102,7 +105,7 @@ write_proposed_entry(int host_id, struct table_entry *entry) {
     // This is always written into a fixed region of the memory. This cannot be
     // exposed as it is to the end user. Make sure to update this somewhere and
     // make it like an API.
-    proposed_update = entry;
+    *proposed_update = *entry;
     return true;
 }
 // We need a voter!
@@ -209,13 +212,20 @@ int reset_count() {
 }
 
 struct table_entry* get_permission_table(int host_id) {
-    if (participant_host_ids[host_id] == true)
-        return permission_table;
+    if (host_id >= 0) {
+        if (participant_host_ids[host_id] == true)
+            return *permission_table;
+        else {
+            // This host ID does not have permission to access the permission table
+            fatal("Host %d does not have permissions to read the permissions",
+                    host_id);
+            return NULL; // unreachable code
+        }
+    }
     else {
-        // This host ID does not have permission to access the permission table
-        fatal("Host %d does not have permissions to read the permissions",
-                host_id);
-        return NULL; // unreachable code
+        assert(host_id == FAM_ID);
+        // This is the FAM. It can access the permission table.
+        return *permission_table;
     }
 }
 
@@ -223,7 +233,6 @@ struct table_entry* get_permission_table(int host_id) {
 int get_is_locked() {
     return *is_locked;
 }
-
 // Here are the functions needed by the FAM to move entries from the proposed
 // section to the actual table. This is something we need to figure out in the
 // long run.
@@ -235,6 +244,7 @@ bool move_proposed_entry(int host_id) {
 
     // The entry is ready in the proposed memory section. Just move it.
     // First lock the memory
+    assert(is_locked != NULL);
     while (write_lock(WRITE, host_id) != true) {
         // wait until the lock is acquired
     }
@@ -242,11 +252,26 @@ bool move_proposed_entry(int host_id) {
     // Now, move the proposed update section to the actual table. Where is the
     // table at rn?
     struct table_entry *proposal = get_proposed_entry();
+    if (verbose) {
+        // what is the proposed entry?
+        info("Proposed entry by host %d: domain_id: %d, permission: %d, "
+                "shared_mask: %d, is_valid: %d\n",
+                host_id, proposal->domain_id, proposal->permission,
+                proposal->shared_mask, proposal->is_valid);
+    }
     // TODO: Ignore voting in this version. Fix it later.
     struct table_entry *head = get_permission_table(host_id);
 
     // TODO: See if this request can be merged?
+
+    // allocate memory
     head[get_permission_table_index()] = *proposal;
+    info("head info at index %d: domain_id: %d, permission: %d, "
+            "shared_mask: %d, is_valid: %d\n",
+            get_permission_table_index(), head[get_permission_table_index()].domain_id,
+            head[get_permission_table_index()].permission,
+            head[get_permission_table_index()].shared_mask,
+            head[get_permission_table_index()].is_valid);
     // increment the counter of the index.
     set_permission_table_index(get_permission_table_index() + 1);
 
@@ -294,7 +319,7 @@ int get_permission_table_count() {
 }
 
 int get_permission_table_index() {
-    return permission_table_index;
+    return *permission_table_index;
 }
 
 void set_permission_table_count(int table_count) {
@@ -306,5 +331,134 @@ void set_permission_table_count(int table_count) {
 void set_permission_table_index(int table_index) {
     // make sure that the table index is bounded!
     assert(table_index >= 0 && table_index <= MAX_PARTICIPANT_COUNT);
-    permission_table_index = table_index;
+    *permission_table_index = table_index;
+}
+
+// Here is the user interface for getting the get_is_locked function.
+void print_lock_info() {
+    info("is_locked: %d, who_locked: %d, participant_count: %d\n",
+            get_is_locked(), get_who_locked(), get_participant_count());
+}
+
+void print_proposed_update(int host_id) {
+    // This is a utility function to print the proposed update.
+    // security feature: only the FAM can see the proposed update.
+    if (host_id != FAM_ID) {
+        fatal("Host %d is not allowed to see the proposed update!", host_id);
+    }
+    struct table_entry *entry = get_proposed_entry();
+    info("Proposed entry by host %d: domain_id: %d, permission: %d, "
+            "shared_mask: %d, is_valid: %d\n",
+            host_id, entry->domain_id, entry->permission,
+            entry->shared_mask, entry->is_valid);
+}
+
+void print_vote_count(int host_id) {
+    // This is a utility function to print the vote count.
+    // security feature: only the FAM can see the vote count.
+    if (host_id != FAM_ID) {
+        fatal("Host %d is not allowed to see the vote count!", host_id);
+    }
+    info("Vote count: %d\n", get_count());
+}
+
+void print_permission_table(int host_id) {
+    // This is a utility function to print the permission table.
+    // security feature: only the FAM can see the permission table.
+    if (host_id != FAM_ID) {
+        fatal("Host %d is not allowed to see the permission table!", host_id);
+    }
+    info("Permission table has %d entries:\n", get_permission_table_index());
+    for (int i = 0; i < get_permission_table_index(); i++) {
+        struct table_entry *entry = permission_table[i];
+        info("Entry %d: domain_id: %d, permission: %d, shared_mask: %d, "
+                "is_dirty: %d, is_valid: %d\n",
+                i, entry->domain_id, entry->permission,
+                entry->shared_mask, entry->is_dirty, entry->is_valid);
+    }
+}
+
+void init_fam(int* start_address) {
+    // This function initializes the FAM.
+    // make sure the the initial region is mapped to null
+    assert(monitor_region == NULL);
+    monitor_region = (struct table_entry *) &start_address[PROPOSED_UPDATE];
+    // shared_region = (uint8_t *) start_address + PROPOSED_UPDATE;
+    // *futex_flag = 0;
+    assert(monitor_region != NULL);
+}
+
+void monitor_update_old(int host_id, int* start_address) {
+    // This is the FAM's function that monitor and updates the permission table
+    // and the lock information. This is called by the FAM to update the
+    // permission table and the lock information.
+    assert(host_id == FAM_ID);
+    // This is an address!
+    struct table_entry *old_entry = (struct table_entry *)
+                                            &start_address[PROPOSED_UPDATE];
+    while (true) {
+        // monitor the proposed update section.
+        monitor_and_wait(start_address + PROPOSED_UPDATE);
+        if (old_entry != monitor_region) {
+            // changes detected!
+            info("changes detected in the proposed update section by host");
+            // TODO: The voting is not implemented yet 
+            if (get_count() > 0 || true) {
+                // move this entry to the table
+                if (move_proposed_entry(host_id) == true) {
+                    info("Moved the proposed entry to the permission table");
+                }
+                else {
+                    // FAM cannot be crashed at any point. If this happens, the
+                    // entire memory needs to be wiped out to prevent memory
+                    // leak!
+                    fatal("Failed to move the proposed entry to the permission table");
+                }
+            }
+        }
+    }
+}
+
+void monitor_update(int host_id, int* start_address) {
+    // This is the FAM's function that monitor and updates the permission table
+    // and the lock information. This is called by the FAM to update the
+    // permission table and the lock information.
+    assert(host_id == FAM_ID);
+    // This is an address!
+    while (true) {
+        // monitor the proposed update section.
+        struct table_entry *old_entry = get_proposed_entry();
+        printf("valid bit: %d\n", old_entry->is_valid);
+        if (old_entry->is_valid == 1) {
+            // This means that the entry is  valid. This is a lazy
+            // implementation.
+            // FIXME: Lock is too slow
+            // whoever locked the region is the one changing the entry.
+            info("changes detected in the proposed update section by host %d",
+                    get_who_locked());
+            // move this entry to the permission table
+            move_proposed_entry(host_id);
+            // reset the proposed entry
+            old_entry->is_valid = 0; // reset the valid bit
+        }
+        sleep(1); // sleep for a while to avoid busy waiting
+    }
+}
+
+void unoptimized_monitor_and_wait(volatile void *addr) {
+    // This is an unoptimized version of the monitor and wait function.
+    // It uses the monitor and mwait instructions to wait for a change in the
+    // memory location pointed by addr.
+    fatal("NotImplementedError: unoptimized_monitor_and_wait is not implemented yet!");
+}
+
+void monitor_and_wait(volatile void *addr) {
+ asm volatile (
+ "mfence\n\t" // Ensure memory operations complete
+ "monitor\n\t" // Set up monitoring on addr
+ "mwait\n\t" // Wait until addr is written to
+ :
+ : "a"(addr), "c"(0), "d"(0)
+ : "memory"
+);
 }

@@ -44,10 +44,11 @@ Writing to the metadata is done by the host that has the write lock. This is
 the critical section of the code. The host that has the write lock before
 making changes to the table.
 
-______________________________________ .. _____________________________ .. ____
-| is     | who    | participant | participant | proposed | count | entries    |
-| locked | locked | count (N)   | host IDs    | update   |       |            |   
-|________|________|_____________|_____ .. ____|__________|_______|_____ .. ___|
+// FIXME: Number of entries in the permission table is not defined.
+______________________________________ .. _____________________________________ .. ____
+| is     | who    | participant | participant | proposed | count | table | entries    |
+| locked | locked | count (N)   | host IDs    | update   |       | count |            |   
+|________|________|_____________|_____ .. ____|__________|_______|_______|_____ .. ___|
 <--4B---><--4B---><-----4B-----><----N*4B----><--entry--><--4B--><-- entries ->
 
 */
@@ -57,6 +58,8 @@ ______________________________________ .. _____________________________ .. ____
 #include <stdint.h>
 #include <stdbool.h>
 #include <assert.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "utility.hh"
 
@@ -108,6 +111,10 @@ struct s_dmalloc_entry {
 #define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + (MAX_PARTICIPANT_COUNT * sizeof(int)))
 #define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + sizeof(struct table_entry))
 #define COUNT (PROPOSED_UPDATE + sizeof(int))
+#define INDEX_COUNT (COUNT + sizeof(int))
+
+// The FAM needs to have a fixed size of the permission table.
+#define UPDATE_RANGE (COUNT - PROPOSED_UPDATE)
 
 // we need a bunch of global variables that manages the memory
 extern struct s_dmalloc_entry *global_addr_;   // Manages the start addresses*
@@ -119,9 +126,9 @@ extern int* participant_count;
 extern int* participant_host_ids;
 extern struct table_entry* proposed_update;
 extern int* count;
-extern struct table_entry* permission_table;
-extern int permission_table_count;
-extern int permission_table_index;
+extern struct table_entry* permission_table[1024];
+extern int permission_table_count;  // TOTAL entries
+extern int *permission_table_index;
 
 // All the functions are declared here for better book-keeping!
 
@@ -176,6 +183,23 @@ int get_permission_table_count();
 int get_permission_table_index();
 void set_permission_table_count(int table_count);
 void set_permission_table_index(int table_index);
+
+// Here are couple of more utility functions that are used by the user to get
+// memory information with a more explainable way.
+void print_lock_info();
+void print_proposed_update(int host_id);
+void print_vote_count(int host_id);
+void print_permission_table(int host_id);
+
+// FAM specific functions.
+extern volatile struct table_entry* monitor_region;
+
+extern volatile uint8_t *shared_region;
+extern volatile int *futex_flag;
+
+void init_fam(int* start_address);
+void monitor_update(int host_id, int* start_address);
+void monitor_and_wait(volatile void *addr);
 
 // All function definitions are here!
 
