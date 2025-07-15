@@ -31,16 +31,19 @@ int main(int argc, char **argv) {
 
     // if there areguments
     int my_host_id = MY_HOST_ID;
+    size_t size = 0x80000000;
     if (argc > 1) {
         // info("Host ID is %s", argv[1]);
         info("Host ID is %s", argv[1]);
         my_host_id = atoi(argv[1]);
+        if (argc > 2)
+            size = (size_t) atoi(argv[2]) * 0x40000000;
     }
 
 
     // define my context! We need a better looking function :(
-    unsigned int my_process_id[1] = { (unsigned int) getpid() };
-    // context_t *context = create_context(
+    // unsigned int my_process_id[1] = { (unsigned int) getpid() };
+    // context_t context = *create_context(
     //                             my_host_id, my_process_id, 1);
     context_t context = {my_host_id, {(unsigned int) getpid(), 0, 0, 0, 0, 0, 0, 0}, 1};
     // A single bit represents permissions: 0 -> read, 1 -> read/write
@@ -48,8 +51,7 @@ int main(int argc, char **argv) {
     bool test_mode = true;
     bool verbose = true;
 
-    const size_t size = 2; // size of the memory to allocate.
-    
+
     // As a user I only know what memory I want for a given process.
     dmalloc_t *s_ptr = secure_alloc(size, context, permission, test_mode,
                                                                     verbose);

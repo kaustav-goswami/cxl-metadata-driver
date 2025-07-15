@@ -1,7 +1,7 @@
 #ifndef __S_PERMISSIONS_HH__
 #define __S_PERMISSIONS_HH__
 
-/* This promgram manages a flat memory range in a distributed manner. */
+/* This program manages a flat memory range in a distributed manner. */
 
 /* The goal of the project is to create a a flat memory range in the remote
 memory that is managed by the opearting systems of each host. Standard shared
@@ -51,6 +51,20 @@ ______________________________________ .. _____________________________________ 
 |________|________|_____________|_____ .. ____|__________|_______|_______|_____ .. ___|
 <--4B---><--4B---><-----4B-----><----N*4B----><--entry--><--4B--><-- entries ->
 
+* Limitations *
+1. Since the testing infrastructure is purely shm based, even if addresses are
+mapped to the same physical address, different virtual addresses are created
+across different process.
+populate_table_entry cannot merge synonyms in the OS-based testing cases.
+The hardware version via gem5 *may not* have this problem.
+
+-> While this does not downgrade any of the security issues, this does create
+multiple entries in the permission table.
+
+2. When a host tries to directly mmap into the shared memory range, the system
+level version of the code (aka this driver) cannot prevent this. This has to
+be tested and verified with dedicated hardware implemented via gem5.
+
 */
 
 #include <stdio.h>
@@ -74,6 +88,33 @@ typedef struct domain domain_t;
 // is a still a driver code.
 typedef struct s_dmalloc_entry dmalloc_t;
 
+// Hardcoded sections. Max number of participant hosts is 1024
+// FIXME:
+#define MAX_PARTICIPANT_COUNT 1024
+#define MAX_CONTEXT 8
+#define MAX_PROCESSES 8
+// The head is hardcoded to 1G of memory.
+#define TABLE_SIZE 0x40000000
+// FAM needs to have a fixed ID
+#define FAM_ID -2
+// Define the offsets
+#define IS_LOCKED 0
+#define WHO_LOCKED (IS_LOCKED + sizeof(int))
+#define PARTICIPANT_COUNT (WHO_LOCKED + sizeof(int))
+#define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + sizeof(int)) // ))
+#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + (MAX_PARTICIPANT_COUNT * sizeof(int))) // 
+#define COUNT (PROPOSED_UPDATE + sizeof(entry_t))
+#define INDEX_COUNT (COUNT + sizeof(int))
+#define PERMISSION_TABLE (INDEX_COUNT + sizeof(int))
+
+// The FAM needs to have a fixed size of the permission table.
+#define UPDATE_RANGE (COUNT - PROPOSED_UPDATE)
+
+// The FAM needs to sleep for a while to avoid busy waiting. This in
+// microseconds.
+#define FAM_SLEEP 1000000
+
+
 // Define the state enum. This is used to manage the reading and writing the
 // metadata of the shared memory (aka the head).
 enum states {
@@ -92,7 +133,7 @@ struct context {
     // The process ID of the process that owns this domain. In this version,
     // we only support up to 8 processes per host. A VM ID can also be used
     // here, but this is not implemented yet.
-    unsigned int process_id[8];
+    unsigned int process_id[MAX_PROCESSES];
     // The number of valid processes must be defined! *sign* "C"
     unsigned int valid_processes;
 };
@@ -102,13 +143,14 @@ struct domain {
     int id;     // a monotonic ID of the domain
     // XXX: This is a hardcoded value. This is the maximum number of
     // contexts that can be merged into a single domain.
-    context_t context[8];
+    context_t context[MAX_CONTEXT];
     unsigned int valid_contexts; // the number of valid contexts
 };
 
 struct range {
     // The start address of the range.
     int* start;
+    // this size needs to be bytes.
     size_t size;
 };
 
@@ -118,6 +160,12 @@ struct table_entry {
     // The context ID (aka PCID, set of PCID or a VMID)
     domain_t domain;
     range_t range;
+    // A dedicated host_id is needed, mostly for removing entries. This is the
+    // host which wants to either remove someone else's access
+    // (domain.context[0].host_id). yes [0] is fixed. and can remove up to
+    // MAX_PROCESSES. This will always be ignore unless removing entries;
+    // TODO: Make a validity check!
+    int initiator_host_id;
     // The permission bit. This only needs to be either a read or a write. Page
     // permissions already has an execute bit, which we can simply ignore in
     // the hardware.
@@ -136,29 +184,6 @@ struct s_dmalloc_entry {
     int *data_start_address;
     int permissions;
 };
-
-// Hardcoded sections. Max number of participant hosts is 1024
-// FIXME:
-#define MAX_PARTICIPANT_COUNT 1024
-// The head is hardcoded to 1G of memory.
-#define TABLE_SIZE 0x40000000
-// FAM needs to have a fixed ID
-#define FAM_ID -2
-// Define the offsets
-#define IS_LOCKED 0
-#define WHO_LOCKED sizeof(int)
-#define PARTICIPANT_COUNT (WHO_LOCKED + sizeof(int))
-#define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + (MAX_PARTICIPANT_COUNT * sizeof(int)))
-#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + sizeof(entry_t))
-#define COUNT (PROPOSED_UPDATE + sizeof(int))
-#define INDEX_COUNT (COUNT + sizeof(int))
-
-// The FAM needs to have a fixed size of the permission table.
-#define UPDATE_RANGE (COUNT - PROPOSED_UPDATE)
-
-// The FAM needs to sleep for a while to avoid busy waiting. This in
-// microseconds.
-#define FAM_SLEEP 1000000
 
 
 // we need a bunch of global variables that manages the memory
@@ -196,6 +221,8 @@ void vote_entry(int host_id, int vote);
 // The FAM needs to reset the vote counter after moving the entry from the
 // proposed section to the permission table
 bool reset_vote();
+// TODO: Figure out why are there two functions doing the same thing?
+void reset_count();
 // We need a function to create a new entry and wait until it gets approved by
 // everyone.
 bool create_and_wait_to_get_access(int host_id, entry_t *entry);
@@ -232,12 +259,16 @@ context_t* create_context(int host_id, unsigned int* process_id,
 // assume that the FAM node does the actual writes, then we can use the
 // folowing functions to move or remove proposed entries into the actual table.
 bool move_proposed_entry(int host_id);
+// TODO: Marked for deletion
 bool remove_proposed_entry(int host_id);
 // We need a couple of setter and getter for the FAM also
+void populate_table_entry(int host_id, entry_t proposal);
+bool remove_table_entry(int host_id, entry_t proposal);
+
 int get_permission_table_count();
 int get_permission_table_index();
 void set_permission_table_count(int table_count);
-void set_permission_table_index(int table_index);
+void set_permission_table_index(int host_id, int table_index);
 
 // Here are couple of more utility functions that are used by the user to get
 // memory information with a more explainable way.
@@ -245,6 +276,7 @@ void print_lock_info();
 void print_proposed_update(int host_id);
 void print_vote_count(int host_id);
 void print_permission_table(int host_id);
+void print_single_entry(entry_t* entry);
 
 // FAM specific functions.
 extern volatile entry_t* monitor_region;

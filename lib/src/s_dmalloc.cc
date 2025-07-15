@@ -19,7 +19,7 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
 
     // We have a start address to the permission table. We assume that the
     // first 1 GiB of memory is reserved for the metadata.
-    assert(size > 1);
+    assert(size > ONE_G);
     
     // allocate the local and static variable. It'll be freed when the entry is
     // deleted or the code goes out of scope.
@@ -110,10 +110,12 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
         // Let's try to implement this case
         // I am host 1. Host 0 has already created the head. I need to
         // propose an entry and wait until the voting is done.
-        entry_t *entry = (entry_t *) malloc (sizeof(entry_t));
+        entry_t *entry = get_proposed_entry();
+        // assert(entry->is_valid = 0);
         // creates a process for the host with the process id. I am a new host
         // and I want access to the memory. I propose an update.
         entry->domain.context[0] = context;
+        entry->range = range;
         // XXX:
         entry->domain.valid_contexts = 1; // I can only get one context here.
         entry->permission = permission;
@@ -141,7 +143,7 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
         }
         // Now figure out the pointers to the shared memory section.
         is_allowed = true;
-        free(entry);
+        // free(entry);
     }
     else {
         // This is an unhandled exception! We'll crash the program here!
@@ -244,7 +246,7 @@ dmalloc(size_t size, int host_id) {
     // other hosts should only have READ permission.
     //
     // @params
-    // :size: Size of requested memory in GiB
+    // :size: Size of requested memory in bytes!
     // :host_id: An ID sent to dictate whether this is a master or a worker
     //
     // @returns
@@ -280,12 +282,11 @@ dmalloc(size_t size, int host_id) {
     // software coherence!
     int *ptr;
     if (host_id == 0) {
-        ptr = (int *) mmap (nullptr, size * ONE_G,
+        ptr = (int *) mmap (nullptr, size,
                                     PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     }
     else {
-        ptr = (int *) mmap (nullptr, size * ONE_G,
-                                            PROT_READ, MAP_SHARED, fd, 0);
+        ptr = (int *) mmap (nullptr, size, PROT_READ, MAP_SHARED, fd, 0);
 
     }
 
@@ -308,7 +309,7 @@ hmalloc(size_t size, int host_id) {
     // other hosts should only have READ permission.
     //
     // @params
-    // :size: Size of requested memory in GIB
+    // :size: Size of requested memory in BYTES
     // :host_id: An ID sent to dictate whether this is a master or a worker
     //
     // @returns
@@ -347,10 +348,10 @@ hmalloc(size_t size, int host_id) {
     // try without the huge page but keep the backed file same
     int *ptr;
     if (host_id == 0)
-        ptr = (int *) mmap(0x0, size * ONE_G,
+        ptr = (int *) mmap(0x0, size,
                             PROT_READ | PROT_WRITE, MAP_SHARED, fileno(fp), 0);
     else
-        ptr = (int *) mmap(0x0, size * ONE_G, 
+        ptr = (int *) mmap(0x0, size, 
                                         PROT_READ , MAP_SHARED, fileno(fp), 0);
 
     // The map may fail due to several reasons but we notify the user.
@@ -374,7 +375,7 @@ shmalloc(size_t size, int host_id) {
     // other hosts should only have READ permission.
     //
     // @params
-    // :size: Size of requested memory in GIB
+    // :size: Size of requested memory in bytes
     // :host_id: An ID sent to dictate whether this is a master or a worker
     //
     // @returns
@@ -387,7 +388,7 @@ shmalloc(size_t size, int host_id) {
         exit(EXIT_FAILURE);
     }
 
-    if (ftruncate(fd, size * ONE_G) == -1) {
+    if (ftruncate(fd, size) == -1) {
         perror("ftruncate");
         exit(EXIT_FAILURE);
     }
@@ -396,7 +397,7 @@ shmalloc(size_t size, int host_id) {
     // PROT_READ/WRITE is enforced here.
     // depending upon the host id, we'll set the read/write permissons.
     if (true) {
-        ptr = (int *) mmap(NULL, size * ONE_G,
+        ptr = (int *) mmap(NULL, size,
                                     PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     }
     else {
@@ -404,7 +405,7 @@ shmalloc(size_t size, int host_id) {
         // of permission tables
         fatal("shmalloc: This is not a client host. "
                 "This is a management host. Cannot use shmalloc");
-        ptr = (int *) mmap(NULL, size * ONE_G, PROT_READ, MAP_SHARED, fd, 0);
+        ptr = (int *) mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
     }
     // The map may fail due to several reasons but we notify the user.
     if (ptr == MAP_FAILED) {
@@ -437,7 +438,7 @@ munmap_memory(size_t size, int test_mode, int host_id) {
     // present if the host wants to change it's ID
     //
     // @params
-    // size_t size: size of the shared memory in GiB
+    // size_t size: size of the shared memory in bytes
     // int test_mode: indicate if you're using /dev/dax or /dev/shmem
     //
     // @returns
@@ -457,7 +458,7 @@ munmap_memory(size_t size, int test_mode, int host_id) {
     // absolutely bad programming right here!
     char *arr = (char *) &start[0];
     #pragma omp parallel for
-    for (size_t i = 0 ; i < size * ONE_G; i++)
+    for (size_t i = 0 ; i < size; i++)
         arr[i] = 0; 
 }
 

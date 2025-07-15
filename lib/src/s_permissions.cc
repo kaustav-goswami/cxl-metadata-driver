@@ -21,6 +21,17 @@ volatile int *futex_flag = NULL;
 // A FAM exclusive integer used to manage the domain ids.
 int domains;
 
+void increment_domains() {
+    domains = domains + 1;
+    if (verbose) {
+        info("domains = %d", domains);
+    }
+}
+
+int get_domains() {
+    return domains;
+}
+
 
 void
 assign_all_global_variables(int* start_address, bool this_verbose) {
@@ -34,9 +45,8 @@ assign_all_global_variables(int* start_address, bool this_verbose) {
     count = &start_address[COUNT];
     permission_table_index = &start_address[INDEX_COUNT];
     // The participant hosts should know where the start is.
-    permission_table = (entry_t *) &start_address[COUNT + sizeof(int)];
+    permission_table = (entry_t *) &start_address[PERMISSION_TABLE];
     verbose = this_verbose;
-    domains = 0;
     // Do we need the setter functions now?..
 }
 
@@ -110,7 +120,6 @@ write_proposed_entry(int host_id, entry_t *entry) {
     // exposed as it is to the end user. Make sure to update this somewhere and
     // make it like an API.
     // We need to write the values in entry to the proposed update
-    printf("entries::: %d\n", get_permission_table_index());
     proposed_update->domain = entry->domain;
     proposed_update->range = entry->range;
     proposed_update->permission = entry->permission;
@@ -125,7 +134,6 @@ write_proposed_entry(int host_id, entry_t *entry) {
             entry->range.size,
             entry->domain.id);
     // entry will be killed later.
-    printf(" x entries::: %d\n", get_permission_table_index());
     return true;
 }
 // We need a voter!
@@ -143,12 +151,14 @@ void vote_entry(int host_id, int vote) {
 // everyone.
 bool create_and_wait_to_get_access(int host_id, entry_t *entry) {
     // This is the most complicated function IMHO
+    printf("create and waid %d ---- ", get_permission_table_index());
     if (write_proposed_entry(host_id, entry) == true) {
         // wait until voting is done.
         while (*count <= get_participant_count() / 2) {
             // wait until voting is done. How????
             // TODO: Add a timeout condition.
         }
+        printf(" create and waid %d \n", get_permission_table_index());
         return true;
     }
     else
@@ -215,6 +225,10 @@ entry_t* get_proposed_entry() {
     return proposed_update;
 }
 
+void set_valid_bit() {
+    proposed_update->is_valid = false;
+}
+
 void set_proposed_entry(entry_t* entry) {
     assert(false && "call write_proposed_entry\n");
 }
@@ -227,7 +241,7 @@ void set_count(int my_count) {
         *count += 1;
 }
 
-int reset_count() {
+void reset_count() {
     *count = 0;
 }
 
@@ -278,8 +292,8 @@ void allocate_table_entry() {
     // the first enty is already allocated!
     if (get_permission_table_index() > 0)
         // allocate more memory
-        head = (entry_t *) &global_addr_->start_address[COUNT + sizeof(int) +
-                get_permission_table_index()];
+        head = (entry_t *) &global_addr_->start_address[PERMISSION_TABLE + 
+                get_permission_table_index() * sizeof(entry_t)];
     
     // This index is initialized but do not increment the index yet! Why?
     if (verbose) {
@@ -288,10 +302,10 @@ void allocate_table_entry() {
     }
 }
 
-void populate_table_entry(entry_t proposal) {
+void populate_table_entry(int host_id, entry_t proposal) {
     // This function populates the permission table with the given context and
     // permission.
-    entry_t *head = get_permission_table(FAM_ID);
+    entry_t *head = get_permission_table(host_id);
     // head will never be null as the allocation will always be true.
     if (get_permission_table_index() == 0) {
         // This means that the permission table is not initialized yet. We need
@@ -300,22 +314,24 @@ void populate_table_entry(entry_t proposal) {
         // head = get_permission_table(FAM_ID);
     
         // Now we can populate the entry.
-        // proposal.domain.id = 0;
+        proposal.domain.id = get_domains();
+        increment_domains();
         head[get_permission_table_index()] = proposal;
         // set the proposal's domain id to 0 as this is undefined until now.
         // head[get_permission_table_index()].domain.id = 0;
         head[get_permission_table_index()].domain.valid_contexts = 1;
 
-        if (true) {
+        if (verbose) {
+            // information on this new entry is printed if verbose is turned on
             info("Populating entry for host %d with process %u "
-                    "at index %d for domain id %d",
-                    head[get_permission_table_index()].domain.context[0].host_id,
-                    head[get_permission_table_index()].domain.context[0].process_id[0],
-                    get_permission_table_index(),
-                    head[get_permission_table_index()].domain.id);
+                "at index %d for domain id %d",
+            head[get_permission_table_index()].domain.context[0].host_id,
+            head[get_permission_table_index()].domain.context[0].process_id[0],
+            get_permission_table_index(),
+            head[get_permission_table_index()].domain.id);
         }
-
-        set_permission_table_index(get_permission_table_index() + 1);
+        // increase the table index by 1.
+        set_permission_table_index(host_id, get_permission_table_index() + 1);
     }
     else {
         // see if this entry can be merged? For a given range of memory, if
@@ -330,6 +346,7 @@ void populate_table_entry(entry_t proposal) {
                 // This means that the entry already exists. We can merge the
                 // entries.
                 if (verbose) {
+                    // print this to the usr
                     info("Merging entry for host %d with process %u "
                             "into existing entry at index %d",
                             proposal.domain.context[0].host_id,
@@ -346,22 +363,88 @@ void populate_table_entry(entry_t proposal) {
             // This means that the entry does not exist. We can add it to the
             // permission table.
             allocate_table_entry();
+            proposal.domain.id = get_domains();
+            increment_domains();
             head[get_permission_table_index()] = proposal;
 
             // Increment the index
-            set_permission_table_index(get_permission_table_index() + 1);
+            set_permission_table_index(
+                                    host_id, get_permission_table_index() + 1);
             if (verbose) {
-                info("Creating a new entry with a new domain %d", 1);
+                info("Creating a new entry with a new domain %d", get_domains() - 1);
             }
-            head[get_permission_table_index()].domain.id = domains;
-            domains++;
+            // The needs to be assigned a new domain. Domains just increase
+            // right now.
+            // head[get_permission_table_index()].domain.id = get_domains();
+            // increment_domains();
         }
     }
-
+    // print the permission table.
     if (verbose) {
-        print_permission_table(FAM_ID);
+        // only possible if im the FAM.
+        print_permission_table(host_id);
     }
+    // does not return anything.
+}
 
+bool remove_table_entry(int host_id, entry_t proposal) {
+    // similar to the populate version of the function but returns a boolean
+    // value depending upon whether an entry was found and deleted or not.
+
+    // XXX: Entries cannot be per process. If a host says that it wants to
+    // remove access of another host, then it only know that hosts' id not the
+    // processes.
+    // Waht if other processes of my own system is trying to be malicious?
+    // then the requestor and the victim host must be the same!
+    bool is_found = false;
+
+    // iterate over the permission table. how??
+    // the memory range must match. for a given range of memory, if the
+    // proposed host has access to the memory, remove that host from accessing
+    // the memory anymore.
+    entry_t *head = get_permission_table(host_id);
+    for (int i = 0 ; i < get_permission_table_index(); i++) {
+        // compare the range.
+        if (head[i].range.start == proposal.range.start &&
+                head[i].range.size == proposal.range.size &&
+                head[i].permission == proposal.permission) {
+            // found the range, now compare if proposed->host_id has access or
+            // not. The victim host will always be at 0th index of the domain
+            // context.
+            for (int j = 0 ; j < MAX_CONTEXT; j++) {
+                if (head[i].domain.context[j].host_id ==
+                                        proposal.domain.context[0].host_id) {
+                    // Found the host!
+                    // see I am the same host as the initiator?
+                    if (proposal.initiator_host_id ==
+                                        head[i].domain.context[j].host_id) {
+                        // check what processes to remove
+                        fatal("NotImplementedError! Same host different"
+                            " processes!");
+                    }
+                    else {
+                        // someone wants to remove this entry!
+                        is_found = true;
+                        // The FAM is lazy and simply sets the host_id to
+                        // itself unless deployed in the wild
+                        head[i].domain.context[j].host_id = FAM_ID;
+                        warn("This version of the code does not rearrange the"
+                                                                    " table");
+                        // All the access rights of this host is completely
+                        // removed! 
+                    }
+                }
+            }
+        }
+        else 
+            if (verbose) {
+                info("The requested permission removal is not valid! "
+                    "Either the victim host does not have access permissions "
+                    "or the ranges are incorrect!");
+            }
+    }
+    // depending upon the outcome return is_found!
+    return is_found;
 }
 
 // Here are the functions needed by the FAM to move entries from the proposed
@@ -399,10 +482,16 @@ bool move_proposed_entry(int host_id) {
     }
     // TODO: Ignore voting in this version. Fix it later.
     *count = MAX_PARTICIPANT_COUNT;
-    populate_table_entry(*proposal);
+    populate_table_entry(host_id, *proposal);
     // make sure that this host can access the permission table.
-    set_participant_count(get_participant_count() + 1);
+    // set_participant_count(get_participant_count() + 1);
     participant_host_ids[host_id] = true;
+
+    // reset the proposed entry
+    set_valid_bit();
+    // proposal->is_valid = false;
+
+
 
     // TODO: See if this request can be merged?
 
@@ -441,7 +530,7 @@ bool remove_proposed_entry(int host_id) {
     // }
     // FIXME: Lazy implementation????
     // I am using a valid bit to do a lazy implementation for now.
-    proposal->is_valid = 0;
+    // proposal->is_valid = 0;
 
     // unlock the lock
     unlock(host_id);
@@ -454,8 +543,6 @@ int get_permission_table_count() {
 }
 
 int get_permission_table_index() {
-    // assert(false);
-    printf("index :::::: %d \n", *permission_table_index);
     return *permission_table_index;
 }
 
@@ -465,11 +552,11 @@ void set_permission_table_count(int table_count) {
     permission_table_count = table_count;
 }
 
-void set_permission_table_index(int table_index) {
+void set_permission_table_index(int host_id, int table_index) {
     // make sure that the table index is bounded!
     assert(table_index >= 0 && table_index <= MAX_PARTICIPANT_COUNT);
+    assert(host_id == FAM_ID);
     *permission_table_index = table_index;
-    printf("update:::: %d\n", *permission_table_index);
 }
 
 // Here is the user interface for getting the get_is_locked function.
@@ -501,6 +588,28 @@ void print_vote_count(int host_id) {
     info("Vote count: %d\n", get_count());
 }
 
+void print_single_entry(entry_t *entry) {
+    
+        // The entry can have multiple sub-entries!
+        printf(" %d \t\t", entry->domain.id);
+
+        for (int j = 0; j < entry->domain.valid_contexts; j++) {
+            // print the host_id and process_id
+            printf("[(%d, [", entry->domain.context[j].host_id);
+            for (int k = 0; k < entry->domain.context[j].valid_processes; k++) {
+                printf("%u, ", entry->domain.context[j].process_id[k]);
+            }
+            printf("]), ");
+        }
+        printf("] \t");
+
+        printf("(%p, %lu) \t", entry->range.start, entry->range.size);
+        printf(" %d \t %d \t %d \t %d \n",
+               entry->permission, entry->shared_mask,
+               entry->is_dirty, entry->is_valid);
+
+}
+
 void print_permission_table(int host_id) {
     // This is a utility function to print the permission table.
     // security feature: only the FAM can see the permission table.
@@ -513,9 +622,12 @@ void print_permission_table(int host_id) {
         }
     }
     printf("Permission table has %d entries:\n", get_permission_table_index());
-    printf("----------------------------------------------------\n");
-    printf(" domain_id \t (host_id, [pid]) \t (start, end) \t permission \t shared_mask \t is_dirty \t is_valid\n");
-    printf("----------------------------------------------------\n");
+    printf("----------------------------------------------------"
+        "--------------------------------------------------\n");
+    printf(" domain_id \t [(host_id, [pid])] \t (start, end) \t "
+        "permission \t shared_mask \t is_dirty \t is_valid\n");
+    printf("----------------------------------------------------"
+        "--------------------------------------------------\n");
 
     entry_t *head = get_permission_table(host_id);
     for (int i = 0; i < get_permission_table_index(); i++) {
@@ -524,18 +636,21 @@ void print_permission_table(int host_id) {
 
         for (int j = 0; j < head[i].domain.valid_contexts; j++) {
             // print the host_id and process_id
-            printf("(%d, [", head[i].domain.context[j].host_id);
-            for (int k = 0; k < head[i].domain.context[j].valid_processes; k++) {
+            printf("[(%d, [", head[i].domain.context[j].host_id);
+            for (int k = 0; k < head[i].domain.context[j].valid_processes;
+                                                                        k++) {
                 printf("%u, ", head[i].domain.context[j].process_id[k]);
             }
-            printf("]) \t");
+            printf("]), ");
         }
+        printf("] \t");
 
         printf("(%p, %lu) \t", head[i].range.start, head[i].range.size);
         printf(" %d \t %d \t %d \t %d \n",
                head[i].permission, head[i].shared_mask,
                head[i].is_dirty, head[i].is_valid);
-        printf("----------------------------------------------------");
+        printf("----------------------------------------------------"
+            "--------------------------------------------------\n");
     }
 }
 
@@ -565,8 +680,7 @@ void init_fam(int* start_address) {
     // This function initializes the FAM.
     // make sure the the initial region is mapped to null
     assert(monitor_region == NULL);
-    set_permission_table_index(0);
-    printf(":: inti :: %d\n", get_permission_table_index());
+    set_permission_table_index(FAM_ID, 0);
     monitor_region = (entry_t *) &start_address[PROPOSED_UPDATE];
     // shared_region = (uint8_t *) start_address + PROPOSED_UPDATE;
     // *futex_flag = 0;
@@ -608,6 +722,7 @@ void monitor_update(int host_id, int* start_address) {
     // and the lock information. This is called by the FAM to update the
     // permission table and the lock information.
     assert(host_id == FAM_ID);
+    domains = 0;
     // This is an address!
     while (true) {
         // monitor the proposed update section.
@@ -623,10 +738,11 @@ void monitor_update(int host_id, int* start_address) {
             // move this entry to the permission table
             move_proposed_entry(host_id);
             // reset the proposed entry
-            old_entry->is_valid = 0; // reset the valid bit
+            // old_entry->is_valid = 0; // reset the valid bit
             // if this is a new update, set the vote to high number
             // FIXME:
-            set_count(get_participant_count() / 2 + 1);
+            // set_count(get_participant_count() / 2 + 1);
+            set_count(1024);
             info("Moved the proposed entry to the permission table by host %d",
                     get_who_locked());
         }

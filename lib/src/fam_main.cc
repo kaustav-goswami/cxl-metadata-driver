@@ -56,10 +56,10 @@ int main() {
     bool test_mode = true;
     bool verbose = true;
 
-    const size_t size = 2; // size of the memory to allocate.
+    const size_t size = 0x100000000; // size of the memory to allocate.
 
     // Allocation as the FAM always goes through!
-    struct s_dmalloc_entry *sptr = secure_alloc(size, context, permission, test_mode, verbose);
+    dmalloc_t *sptr = secure_alloc(size, context, permission, test_mode, verbose);
 
     if (sptr->start_address == NULL) {
         fatal("start_address is NULL. This is a bug!.");
