@@ -14,3 +14,12 @@ add_executable(main
     src/s_permissions.cc
     src/utility.hh
     src/utility.cc)
+
+add_executable(fam_main
+    src/fam_main.cc
+    src/s_dmalloc.cc
+    src/s_dmalloc.hh
+    src/s_permissions.hh
+    src/s_permissions.cc
+    src/utility.hh
+    src/utility.cc)
