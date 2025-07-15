@@ -32,12 +32,31 @@ int main(int argc, char **argv) {
     // if there areguments
     int my_host_id = MY_HOST_ID;
     if (argc > 1) {
+        // info("Host ID is %s", argv[1]);
+        info("Host ID is %s", argv[1]);
         my_host_id = atoi(argv[1]);
     }
-    const size_t size = 1; // size of the memory to allocate
-    struct s_dmalloc_entry *sptr = secure_alloc(size, my_host_id, 1, 1, true);
 
-    if (sptr->data_start_address == NULL) {
+
+    // define my context! We need a better looking function :(
+    unsigned int my_process_id[1] = { (unsigned int) getpid() };
+    // context_t *context = create_context(
+    //                             my_host_id, my_process_id, 1);
+    context_t context = {my_host_id, {(unsigned int) getpid(), 0, 0, 0, 0, 0, 0, 0}, 1};
+    // A single bit represents permissions: 0 -> read, 1 -> read/write
+    bool permission = 0b1;
+    bool test_mode = true;
+    bool verbose = true;
+
+    const size_t size = 2; // size of the memory to allocate.
+    
+    // As a user I only know what memory I want for a given process.
+    dmalloc_t *s_ptr = secure_alloc(size, context, permission, test_mode,
+                                                                    verbose);
+    // delete the local context
+    // free(context);
+
+    if (s_ptr->data_start_address == NULL) {
         // This means that the data_start_address is not set. This means that
         // the user has no access to the data_start_address. This is a security
         // feature to ensure that the user cannot access the data_start_address
@@ -61,7 +80,7 @@ int main(int argc, char **argv) {
     // print the proposed update section.
     print_proposed_update(MY_FAKE_HOST_ID);
 
-    sleep(5);
+    sleep(2);
 
     // assume I am the FAM and lemme see the entire table.
     print_permission_table(MY_FAKE_HOST_ID);

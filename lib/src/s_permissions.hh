@@ -46,8 +46,8 @@ making changes to the table.
 
 // FIXME: Number of entries in the permission table is not defined.
 ______________________________________ .. _____________________________________ .. ____
-| is     | who    | participant | participant | proposed | count | table | entries    |
-| locked | locked | count (N)   | host IDs    | update   |       | count |            |   
+| is     | who    | participant | participant | proposed | vote  | table | entries    |
+| locked | locked | count (N)   | host IDs    | update   | count | count |            |   
 |________|________|_____________|_____ .. ____|__________|_______|_______|_____ .. ___|
 <--4B---><--4B---><-----4B-----><----N*4B----><--entry--><--4B--><-- entries ->
 
@@ -65,6 +65,14 @@ ______________________________________ .. _____________________________________ 
 
 // Typedefs are here. 
 typedef uint64_t Addr;
+typedef struct table_entry entry_t;
+typedef struct context context_t;
+typedef struct range range_t;
+typedef struct domain domain_t;
+
+// typedefs are needed for the struct. _t postfix is valid in this case as this
+// is a still a driver code.
+typedef struct s_dmalloc_entry dmalloc_t;
 
 // Define the state enum. This is used to manage the reading and writing the
 // metadata of the shared memory (aka the head).
@@ -74,16 +82,48 @@ enum states {
     WRITE
 };
 
+// A domain is defined as a combination of host_id and the process_id. Can also
+// the cr3.
+struct context {
+    // The host ID of the host that owns this domain. Contexts can be merged as
+    // multiple hosts can share the same range of memory. In that case, there
+    // can be at most 1 table entry with a start, size,
+    int host_id;
+    // The process ID of the process that owns this domain. In this version,
+    // we only support up to 8 processes per host. A VM ID can also be used
+    // here, but this is not implemented yet.
+    unsigned int process_id[8];
+    // The number of valid processes must be defined! *sign* "C"
+    unsigned int valid_processes;
+};
+
+// Multiple contexts should be able to be merged into a single domain.
+struct domain {
+    int id;     // a monotonic ID of the domain
+    // XXX: This is a hardcoded value. This is the maximum number of
+    // contexts that can be merged into a single domain.
+    context_t context[8];
+    unsigned int valid_contexts; // the number of valid contexts
+};
+
+struct range {
+    // The start address of the range.
+    int* start;
+    size_t size;
+};
+
 // Define the structure of the permission table.
 //
 struct table_entry {
     // The context ID (aka PCID, set of PCID or a VMID)
-    int domain_id;
-    // The permission bit. This only needsto be either a read or a write. Papge
+    domain_t domain;
+    range_t range;
+    // The permission bit. This only needs to be either a read or a write. Page
     // permissions already has an execute bit, which we can simply ignore in
     // the hardware.
     bool permission;
-    // The hosts who share this memory segment.
+    // The hosts who share this memory segment. 
+    // TODO: Marked for deletion.
     int shared_mask;
     // Here are a couple of more bits to assign dirty and valid bits
     bool is_dirty;
@@ -109,26 +149,34 @@ struct s_dmalloc_entry {
 #define WHO_LOCKED sizeof(int)
 #define PARTICIPANT_COUNT (WHO_LOCKED + sizeof(int))
 #define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + (MAX_PARTICIPANT_COUNT * sizeof(int)))
-#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + sizeof(struct table_entry))
+#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + sizeof(entry_t))
 #define COUNT (PROPOSED_UPDATE + sizeof(int))
 #define INDEX_COUNT (COUNT + sizeof(int))
 
 // The FAM needs to have a fixed size of the permission table.
 #define UPDATE_RANGE (COUNT - PROPOSED_UPDATE)
 
+// The FAM needs to sleep for a while to avoid busy waiting. This in
+// microseconds.
+#define FAM_SLEEP 1000000
+
+
 // we need a bunch of global variables that manages the memory
-extern struct s_dmalloc_entry *global_addr_;   // Manages the start addresses*
+extern dmalloc_t *global_addr_;   // Manages the start addresses*
 extern bool verbose;                    // verbose is set by the parent
                                         // function
 extern int* is_locked;                  // assigning is locked as a variable
 extern int* who_locked;                 // similar
 extern int* participant_count;
 extern int* participant_host_ids;
-extern struct table_entry* proposed_update;
+extern entry_t* proposed_update;
 extern int* count;
-extern struct table_entry* permission_table[1024];
+// This is a flat table of the permission entries.
+extern entry_t* permission_table;
 extern int permission_table_count;  // TOTAL entries
 extern int *permission_table_index;
+
+extern int domains;
 
 // All the functions are declared here for better book-keeping!
 
@@ -142,7 +190,7 @@ int get_lock_status();
 // We first need a lock writer.
 bool write_lock(int action, int host_id);
 // Then we need a data writer
-bool write_proposed_entry(int host_id, struct table_entry *entry);
+bool write_proposed_entry(int host_id, entry_t *entry);
 // We need a voter!
 void vote_entry(int host_id, int vote);
 // The FAM needs to reset the vote counter after moving the entry from the
@@ -150,7 +198,7 @@ void vote_entry(int host_id, int vote);
 bool reset_vote();
 // We need a function to create a new entry and wait until it gets approved by
 // everyone.
-bool create_and_wait_to_get_access(int host_id, struct table_entry);
+bool create_and_wait_to_get_access(int host_id, entry_t *entry);
 // Finally we need an unlock function to unlock the metadata.
 bool unlock(int host_id);
 // Here are the utility setter and getter functions for the flat memory range.
@@ -164,12 +212,19 @@ void set_participant_count(int participant_count);
 // Returns the integer stored at the index offset
 int get_participant_host_ids(size_t index);
 void set_participant_host_ids(size_t index);
-struct table_entry* get_proposed_entry();
-void set_proposed_entry(struct table_entry* entry);
+entry_t* get_proposed_entry();
+void set_proposed_entry(entry_t* entry);
 int get_count();
 // Sets an integer to vote. Is in between 0 and 1.
 void set_count(int my_count);
-struct table_entry* get_permission_table(int host_id);
+// returns a pointer to the start of the permission table.
+entry_t* get_permission_table(int host_id);
+entry_t* create_new_permission_entry();
+
+// A user-level API is needed to define the number of processes that can share
+// the memory. This is used to create a context for the user.
+context_t* create_context(int host_id, unsigned int* process_id,
+                          unsigned int valid_processes);
 
 // How is the main permission table managed? Ideally this needs to be managed
 // by the hardware. IDK how but the secure trusted hardware needs to get
@@ -192,7 +247,7 @@ void print_vote_count(int host_id);
 void print_permission_table(int host_id);
 
 // FAM specific functions.
-extern volatile struct table_entry* monitor_region;
+extern volatile entry_t* monitor_region;
 
 extern volatile uint8_t *shared_region;
 extern volatile int *futex_flag;

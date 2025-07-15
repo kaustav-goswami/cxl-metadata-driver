@@ -46,11 +46,21 @@ int main() {
     
     // The FAM always resets the memory at start. If FAM is not running, then
     // none of the hosts can access the memory.
-    munmap_memory(1, 1, 0); // reset the memory as the root user is done.
+    munmap_memory(2, 1, 0); // reset the memory as the root user is done.
+
+    // define my context! We need a better looking function :(
+    context_t context = {MY_HOST_ID, {(unsigned int) getpid(),
+                                                    0, 0, 0, 0, 0, 0, 0}, 1};
+    // A single bit represents permissions: 0 -> read, 1 -> read/write
+    bool permission = 0b1;
+    bool test_mode = true;
+    bool verbose = true;
+
+    const size_t size = 2; // size of the memory to allocate.
 
     // Allocation as the FAM always goes through!
-    struct s_dmalloc_entry *sptr = secure_alloc(1, MY_HOST_ID, 1, 1, true);
-    
+    struct s_dmalloc_entry *sptr = secure_alloc(size, context, permission, test_mode, verbose);
+
     if (sptr->start_address == NULL) {
         fatal("start_address is NULL. This is a bug!.");
     }
@@ -58,15 +68,14 @@ int main() {
     // Need threads for constant monitoring.
     init_fam(sptr->start_address);
 
-
-
     print_lock_info();
 
     pthread_t monitor_thread;
     pthread_create(&monitor_thread, NULL, mon_udpate,
-            (void *) sptr->start_address);
+        (void *) sptr->start_address);
 
-    print_permission_table(-2); // assume I am the FAM and lemme see the entire table.
+     // assume I am the FAM and lemme see the entire table.
+    print_permission_table(MY_HOST_ID);
     pthread_join(monitor_thread, NULL);
     
     return 0;

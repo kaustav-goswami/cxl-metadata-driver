@@ -47,11 +47,12 @@
 
 // The first function is to do a secure dmalloc on a flat region of shared
 // memory across hosts.
-struct s_dmalloc_entry *secure_alloc(
-    size_t size, int host_id, int permissions, int test_mode, bool verbose);
+dmalloc_t* secure_alloc(size_t size, context_t context, bool permission,
+                        int test_mode, bool verbose);
 // Now that we have created the mmap segment, we need to create the head if we
 // are the primary host
-void create_head(int host_id, int permissions, bool verbose);
+void create_head(range_t range, context_t context, bool permission,
+                                                                bool verbose);
 // We need a function that traps illegal accesses!
 void create_interrupt();
 // Standard dmalloc functions are defined here.
@@ -64,7 +65,8 @@ void munmap_memory(size_t size, int test_mode, int host_id);
 void flush_x86_cache(int *_mmap_pointer, size_t size);
 
 // an asm utility function on x86 to force flush the cache.
-[[gnu::unused]] static inline __attribute__((always_inline)) void clflushopt(volatile void *p) {
+[[gnu::unused]] static inline __attribute__((always_inline))
+void clflushopt(volatile void *p) {
     // @params
     //
     // p: a pointer to the memory

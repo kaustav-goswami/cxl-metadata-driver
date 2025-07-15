@@ -56,6 +56,11 @@ info(const char* what, ...) {
                 int i = va_arg(args, int);
                 printf("%d", i);
             }
+            else if (*what == 'p') {
+                // Print a pointer
+                void *p = va_arg(args, void *);
+                printf("%p", p);
+            }
             else if 
             (*what == 'l' && *(what + 1) == 'u' && *(what + 2) == 's') {
                 what += 2;

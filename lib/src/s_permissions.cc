@@ -2,21 +2,24 @@
 
 // define all the global variables that are used to manage the shared memory
 // region. These are all undefined in the header file.
-struct s_dmalloc_entry *global_addr_;
+dmalloc_t *global_addr_;
 bool verbose = false;                    // verbose is set by the parent
                                  // function
 int* is_locked;                  // assigning is locked as a variable
 int* who_locked;                 // similar
 int* participant_count;
 int* participant_host_ids;
-struct table_entry* proposed_update;
+entry_t* proposed_update;
 int* count;
-struct table_entry* permission_table[1024];
+entry_t* permission_table = NULL;
 int permission_table_count;
 int *permission_table_index;
-volatile struct table_entry* monitor_region = NULL;
+volatile entry_t* monitor_region = NULL;
 volatile uint8_t *shared_region = NULL;
 volatile int *futex_flag = NULL;
+
+// A FAM exclusive integer used to manage the domain ids.
+int domains;
 
 
 void
@@ -27,12 +30,13 @@ assign_all_global_variables(int* start_address, bool this_verbose) {
     who_locked = &start_address[WHO_LOCKED];
     participant_count = &start_address[PARTICIPANT_COUNT];
     participant_host_ids = &start_address[PARTICIPANT_HOST_IDS];
-    proposed_update = (struct table_entry*) &start_address[PROPOSED_UPDATE];
+    proposed_update = (entry_t*) &start_address[PROPOSED_UPDATE];
     count = &start_address[COUNT];
     permission_table_index = &start_address[INDEX_COUNT];
-    // this is a 2D permissions. Doesn't make any sense. why??
-    *permission_table = (struct table_entry *) &start_address[COUNT + sizeof(int)];
+    // The participant hosts should know where the start is.
+    permission_table = (entry_t *) &start_address[COUNT + sizeof(int)];
     verbose = this_verbose;
+    domains = 0;
     // Do we need the setter functions now?..
 }
 
@@ -101,11 +105,27 @@ write_lock(int action, int host_id) {
     
 // Then we need a data writer
 bool
-write_proposed_entry(int host_id, struct table_entry *entry) {
+write_proposed_entry(int host_id, entry_t *entry) {
     // This is always written into a fixed region of the memory. This cannot be
     // exposed as it is to the end user. Make sure to update this somewhere and
     // make it like an API.
-    *proposed_update = *entry;
+    // We need to write the values in entry to the proposed update
+    printf("entries::: %d\n", get_permission_table_index());
+    proposed_update->domain = entry->domain;
+    proposed_update->range = entry->range;
+    proposed_update->permission = entry->permission;
+    proposed_update->shared_mask = entry->shared_mask;
+    proposed_update->is_valid = entry->is_valid;
+    proposed_update->is_dirty = entry->is_dirty;
+    if (verbose)
+        info("Proposed entry written by host %d, pid %u at (%p, %lu) and domain %d",
+            entry->domain.context[0].host_id,
+            entry->domain.context[0].process_id[0],
+            entry->range.start,
+            entry->range.size,
+            entry->domain.id);
+    // entry will be killed later.
+    printf(" x entries::: %d\n", get_permission_table_index());
     return true;
 }
 // We need a voter!
@@ -121,7 +141,7 @@ void vote_entry(int host_id, int vote) {
 
 // We need a function to create a new entry and wait until it gets approved by
 // everyone.
-bool create_and_wait_to_get_access(int host_id, struct table_entry *entry) {
+bool create_and_wait_to_get_access(int host_id, entry_t *entry) {
     // This is the most complicated function IMHO
     if (write_proposed_entry(host_id, entry) == true) {
         // wait until voting is done.
@@ -191,11 +211,11 @@ void set_participant_host_ids(size_t index) {
     // index is the host_id
     participant_host_ids[index] = true;
 }
-struct table_entry* get_proposed_entry() {
+entry_t* get_proposed_entry() {
     return proposed_update;
 }
 
-void set_proposed_entry(struct table_entry* entry) {
+void set_proposed_entry(entry_t* entry) {
     assert(false && "call write_proposed_entry\n");
 }
 int get_count() {
@@ -211,21 +231,40 @@ int reset_count() {
     *count = 0;
 }
 
-struct table_entry* get_permission_table(int host_id) {
+// Returns a pointer to the start of the permission table. This can be null if
+// this is the first entry to the table.
+entry_t* get_permission_table(int host_id) {
+    // a participant host wants to see the table but we need to check if the
+    // host_id has access and the table is not null.
     if (host_id >= 0) {
-        if (participant_host_ids[host_id] == true)
-            return *permission_table;
+        // I am a participant host. I need to check if the host_id has access
+        // to the permission.
+        if (participant_host_ids[host_id] == true) {
+            // Finally check if the permission table is initialized.
+            if (permission_table != NULL)
+                // return the permission table.
+                return permission_table;
+            else {
+                // The permission table is not initialized yet. This means that
+                // the host_id is not allowed to access the permission table.
+                info("The permission table is not initialized!");
+                return NULL; // unreachable code
+            }
+        }
         else {
-            // This host ID does not have permission to access the permission table
+            // This host ID does not have permission to access the permission
+            // table
             fatal("Host %d does not have permissions to read the permissions",
                     host_id);
             return NULL; // unreachable code
         }
     }
+    // I can be the FAM and I have full control to the permission table.
     else {
         assert(host_id == FAM_ID);
-        // This is the FAM. It can access the permission table.
-        return *permission_table;
+        // This is the FAM. It can access the permission table. This can be
+        // null but the move_ function handles this.
+        return permission_table;
     }
 }
 
@@ -233,6 +272,98 @@ struct table_entry* get_permission_table(int host_id) {
 int get_is_locked() {
     return *is_locked;
 }
+
+void allocate_table_entry() {
+    entry_t *head = get_permission_table(FAM_ID);
+    // the first enty is already allocated!
+    if (get_permission_table_index() > 0)
+        // allocate more memory
+        head = (entry_t *) &global_addr_->start_address[COUNT + sizeof(int) +
+                get_permission_table_index()];
+    
+    // This index is initialized but do not increment the index yet! Why?
+    if (verbose) {
+        info("Permission table is initialized at %p with index %d",
+                head, get_permission_table_index());
+    }
+}
+
+void populate_table_entry(entry_t proposal) {
+    // This function populates the permission table with the given context and
+    // permission.
+    entry_t *head = get_permission_table(FAM_ID);
+    // head will never be null as the allocation will always be true.
+    if (get_permission_table_index() == 0) {
+        // This means that the permission table is not initialized yet. We need
+        // to initialize it.
+        // allocate_table_entry();
+        // head = get_permission_table(FAM_ID);
+    
+        // Now we can populate the entry.
+        // proposal.domain.id = 0;
+        head[get_permission_table_index()] = proposal;
+        // set the proposal's domain id to 0 as this is undefined until now.
+        // head[get_permission_table_index()].domain.id = 0;
+        head[get_permission_table_index()].domain.valid_contexts = 1;
+
+        if (true) {
+            info("Populating entry for host %d with process %u "
+                    "at index %d for domain id %d",
+                    head[get_permission_table_index()].domain.context[0].host_id,
+                    head[get_permission_table_index()].domain.context[0].process_id[0],
+                    get_permission_table_index(),
+                    head[get_permission_table_index()].domain.id);
+        }
+
+        set_permission_table_index(get_permission_table_index() + 1);
+    }
+    else {
+        // see if this entry can be merged? For a given range of memory, if
+        // multiple hosts are trying to access the same memory, we can merge
+        // the entries.
+        bool flag = false;
+        for (int i = 0; i < get_permission_table_index(); i++) {
+            // check if the host_id and the process_id matches
+            if (head[i].range.start == proposal.range.start &&
+                    head[i].range.size == proposal.range.size &&
+                    head[i].permission == proposal.permission) {
+                // This means that the entry already exists. We can merge the
+                // entries.
+                if (verbose) {
+                    info("Merging entry for host %d with process %u "
+                            "into existing entry at index %d",
+                            proposal.domain.context[0].host_id,
+                            proposal.domain.context[0].process_id[0], i);
+                }
+                head[i].domain.context[head[i].domain.valid_contexts] = 
+                    proposal.domain.context[0];
+                head[i].domain.valid_contexts++;
+                flag = true;
+                break;
+            }
+        }
+        if (flag == false) {
+            // This means that the entry does not exist. We can add it to the
+            // permission table.
+            allocate_table_entry();
+            head[get_permission_table_index()] = proposal;
+
+            // Increment the index
+            set_permission_table_index(get_permission_table_index() + 1);
+            if (verbose) {
+                info("Creating a new entry with a new domain %d", 1);
+            }
+            head[get_permission_table_index()].domain.id = domains;
+            domains++;
+        }
+    }
+
+    if (verbose) {
+        print_permission_table(FAM_ID);
+    }
+
+}
+
 // Here are the functions needed by the FAM to move entries from the proposed
 // section to the actual table. This is something we need to figure out in the
 // long run.
@@ -251,33 +382,37 @@ bool move_proposed_entry(int host_id) {
 
     // Now, move the proposed update section to the actual table. Where is the
     // table at rn?
-    struct table_entry *proposal = get_proposed_entry();
+    entry_t *proposal = get_proposed_entry();
+    // the proposal has a domain, which IDK yet. The proposal is based on the
+    // range and the context. The doamin is assigned by the framework.
+
+
     if (verbose) {
-        // what is the proposed entry?
-        info("Proposed entry by host %d: domain_id: %d, permission: %d, "
+        // what is the proposed entry? It is defiend in the proposal!
+        // FIXME: check only for the valid number of processes!!!
+        info("Proposed entry by host %d: pid: %u, permission: %d, "
                 "shared_mask: %d, is_valid: %d\n",
-                host_id, proposal->domain_id, proposal->permission,
-                proposal->shared_mask, proposal->is_valid);
+                proposal->domain.context[0].host_id,
+                proposal->domain.context[0].process_id[0],
+                proposal->permission, proposal->shared_mask,
+                proposal->is_valid);
     }
     // TODO: Ignore voting in this version. Fix it later.
-    struct table_entry *head = get_permission_table(host_id);
+    *count = MAX_PARTICIPANT_COUNT;
+    populate_table_entry(*proposal);
+    // make sure that this host can access the permission table.
+    set_participant_count(get_participant_count() + 1);
+    participant_host_ids[host_id] = true;
 
     // TODO: See if this request can be merged?
 
-    // allocate memory
-    head[get_permission_table_index()] = *proposal;
-    info("head info at index %d: domain_id: %d, permission: %d, "
-            "shared_mask: %d, is_valid: %d\n",
-            get_permission_table_index(), head[get_permission_table_index()].domain_id,
-            head[get_permission_table_index()].permission,
-            head[get_permission_table_index()].shared_mask,
-            head[get_permission_table_index()].is_valid);
-    // increment the counter of the index.
-    set_permission_table_index(get_permission_table_index() + 1);
-
     // unlock the lock
     unlock(host_id);
-    // print this to the user if they want. NVM
+    // print this to the user if they want. 
+    // Notify the user about the successful update.
+    if (verbose) {
+        info("Host %d successfully updated the permission table.\n", host_id);
+    }
 
     // make sure to notify the FAM that the update was successful.
     return true;
@@ -293,13 +428,13 @@ bool remove_proposed_entry(int host_id) {
     while (write_lock(WRITE, host_id) != true) {
         // wait until the lock is acquired
     }
-    // The enty is readu in the update section.
-    struct table_entry *proposal = get_proposed_entry();
+    // The entry is ready in the update section.
+    entry_t *proposal = get_proposed_entry();
     // TODO: Ignore voting in this version. Fix it later.
-    struct table_entry *head = get_permission_table(host_id);
+    entry_t *head = get_permission_table(host_id);
 
     // TODO: See if this request can be merged?
-    // Now, serach the host and the context_id to match an entry and remove the
+    // Now, search the host and the context_id to match an entry and remove the
     // entry.
     // for (size_t i = 0; i < get_permission_table_count(); i++) {
     //     if (*head[i]->domain_id == proposal->domain_id)
@@ -319,6 +454,8 @@ int get_permission_table_count() {
 }
 
 int get_permission_table_index() {
+    // assert(false);
+    printf("index :::::: %d \n", *permission_table_index);
     return *permission_table_index;
 }
 
@@ -332,6 +469,7 @@ void set_permission_table_index(int table_index) {
     // make sure that the table index is bounded!
     assert(table_index >= 0 && table_index <= MAX_PARTICIPANT_COUNT);
     *permission_table_index = table_index;
+    printf("update:::: %d\n", *permission_table_index);
 }
 
 // Here is the user interface for getting the get_is_locked function.
@@ -346,10 +484,11 @@ void print_proposed_update(int host_id) {
     if (host_id != FAM_ID) {
         fatal("Host %d is not allowed to see the proposed update!", host_id);
     }
-    struct table_entry *entry = get_proposed_entry();
-    info("Proposed entry by host %d: domain_id: %d, permission: %d, "
+    entry_t *entry = get_proposed_entry();
+    info("Proposed entry by host %d: process_id: %d, permission: %d, "
             "shared_mask: %d, is_valid: %d\n",
-            host_id, entry->domain_id, entry->permission,
+            host_id, entry->domain.context[0].process_id[0],
+            entry->permission,
             entry->shared_mask, entry->is_valid);
 }
 
@@ -366,23 +505,69 @@ void print_permission_table(int host_id) {
     // This is a utility function to print the permission table.
     // security feature: only the FAM can see the permission table.
     if (host_id != FAM_ID) {
-        fatal("Host %d is not allowed to see the permission table!", host_id);
+        // if I am a participant host with valid permissions, I should be able
+        // to see the permission table.
+        // handle overflow!
+        if (participant_host_ids[host_id] == false && host_id < get_participant_count()) {
+            fatal("Host %d is not allowed to see the permission table!", host_id);
+        }
     }
-    info("Permission table has %d entries:\n", get_permission_table_index());
+    printf("Permission table has %d entries:\n", get_permission_table_index());
+    printf("----------------------------------------------------\n");
+    printf(" domain_id \t (host_id, [pid]) \t (start, end) \t permission \t shared_mask \t is_dirty \t is_valid\n");
+    printf("----------------------------------------------------\n");
+
+    entry_t *head = get_permission_table(host_id);
     for (int i = 0; i < get_permission_table_index(); i++) {
-        struct table_entry *entry = permission_table[i];
-        info("Entry %d: domain_id: %d, permission: %d, shared_mask: %d, "
-                "is_dirty: %d, is_valid: %d\n",
-                i, entry->domain_id, entry->permission,
-                entry->shared_mask, entry->is_dirty, entry->is_valid);
+        // The entry can have multiple sub-entries!
+        printf(" %d \t\t", head[i].domain.id);
+
+        for (int j = 0; j < head[i].domain.valid_contexts; j++) {
+            // print the host_id and process_id
+            printf("(%d, [", head[i].domain.context[j].host_id);
+            for (int k = 0; k < head[i].domain.context[j].valid_processes; k++) {
+                printf("%u, ", head[i].domain.context[j].process_id[k]);
+            }
+            printf("]) \t");
+        }
+
+        printf("(%p, %lu) \t", head[i].range.start, head[i].range.size);
+        printf(" %d \t %d \t %d \t %d \n",
+               head[i].permission, head[i].shared_mask,
+               head[i].is_dirty, head[i].is_valid);
+        printf("----------------------------------------------------");
     }
 }
+
+context_t *create_context(int host_id, unsigned int *process_id,
+        unsigned int valid_processes) {
+    // This function creates a context for the user. This is used to create a
+    // context for the user.
+    if (host_id != FAM_ID) {
+        // If I am not the FAM then I am bounded by the maximum participant.
+        assert(host_id >= 0 && host_id < MAX_PARTICIPANT_COUNT);
+    }
+    // FIXME: We need another header specific for the FAM.
+    // The context is initialized in the local memory before moving to the
+    // permission table.
+    context_t *context = (context_t *) malloc (sizeof(context_t));
+    context->host_id = host_id;
+    for (size_t i = 0 ; i < (size_t) valid_processes; i++) {
+        context->process_id[i] = process_id[i];
+    }
+    context->valid_processes = valid_processes;
+    return context;
+}
+
+// ------------------------- FAM starts here ------------------------------- //
 
 void init_fam(int* start_address) {
     // This function initializes the FAM.
     // make sure the the initial region is mapped to null
     assert(monitor_region == NULL);
-    monitor_region = (struct table_entry *) &start_address[PROPOSED_UPDATE];
+    set_permission_table_index(0);
+    printf(":: inti :: %d\n", get_permission_table_index());
+    monitor_region = (entry_t *) &start_address[PROPOSED_UPDATE];
     // shared_region = (uint8_t *) start_address + PROPOSED_UPDATE;
     // *futex_flag = 0;
     assert(monitor_region != NULL);
@@ -394,8 +579,7 @@ void monitor_update_old(int host_id, int* start_address) {
     // permission table and the lock information.
     assert(host_id == FAM_ID);
     // This is an address!
-    struct table_entry *old_entry = (struct table_entry *)
-                                            &start_address[PROPOSED_UPDATE];
+    entry_t *old_entry = (entry_t *) &start_address[PROPOSED_UPDATE];
     while (true) {
         // monitor the proposed update section.
         monitor_and_wait(start_address + PROPOSED_UPDATE);
@@ -427,8 +611,8 @@ void monitor_update(int host_id, int* start_address) {
     // This is an address!
     while (true) {
         // monitor the proposed update section.
-        struct table_entry *old_entry = get_proposed_entry();
-        printf("valid bit: %d\n", old_entry->is_valid);
+        entry_t *old_entry = get_proposed_entry();
+        printf("valid bit: %d \t entries %d\n", old_entry->is_valid, get_permission_table_index());
         if (old_entry->is_valid == 1) {
             // This means that the entry is  valid. This is a lazy
             // implementation.
@@ -446,7 +630,7 @@ void monitor_update(int host_id, int* start_address) {
             info("Moved the proposed entry to the permission table by host %d",
                     get_who_locked());
         }
-        sleep(1); // sleep for a while to avoid busy waiting
+        usleep(FAM_SLEEP); // sleep for a while to avoid busy waiting
     }
 }
 

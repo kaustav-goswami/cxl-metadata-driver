@@ -8,6 +8,8 @@
 
 #include "s_dmalloc.hh"
 
+typedef struct gapbs_entry gapbs_t;
+
 struct gapbs_entry {
     // The start address of the graph
     struct s_dmalloc_entry *entry;

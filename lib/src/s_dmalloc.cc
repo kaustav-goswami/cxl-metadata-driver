@@ -1,9 +1,7 @@
 #include "s_dmalloc.hh"
 
-// --------------------- start of all utility functions -------------------- //
-
-struct s_dmalloc_entry*
-secure_alloc(size_t size, int host_id, int permissions, int test_mode,
+dmalloc_t*
+secure_alloc(size_t size, context_t context, bool permission, int test_mode,
                                                         bool this_verbose) {
     // Simple step here is to create a s_dmalloc_entry to store the start
     // addresses and the permissions.
@@ -11,26 +9,42 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     // Depending upon the test mode, we create dmalloc or shmalloc
     int *start_address;
     if (test_mode == 0)
-        start_address = dmalloc(size, host_id);
+        start_address = dmalloc(size, context.host_id);
     else if (test_mode == 1)
-        start_address = shmalloc(size, host_id);
+        start_address = shmalloc(size, context.host_id);
     else
         // Illegal operation
         fatal("Cannot create memory region without a valid test mode (%d)",
                 test_mode);
+
+    // We have a start address to the permission table. We assume that the
+    // first 1 GiB of memory is reserved for the metadata.
+    assert(size > 1);
+    
+    // allocate the local and static variable. It'll be freed when the entry is
+    // deleted or the code goes out of scope.
+    // TODO: When the middleware will be implemented, this allocator needs to
+    // define multiple ranges.
+    range_t range;
+    if (context.host_id != FAM_ID) {
+        range.start = start_address + ONE_G;
+        range.size = size - 1;
+    }
+
+    // I'll jsut assume that after 1 GiB, the actual data starts.
     // Since this is the first time anyone is calling this function from this
     // host, make sure that the global variables are setup and the start
     // addresses aren't passed around functions.
     assign_all_global_variables(start_address, this_verbose);
     // If I am the FAM, then don't worry about setting the head.
-    if (host_id == FAM_ID) {
+    if (context.host_id == FAM_ID) {
         // This is the FAM, so we can set the permissions to 1.
-        global_addr_ = (struct s_dmalloc_entry *)
-                                    malloc (sizeof(struct s_dmalloc_entry));
+        global_addr_ = (dmalloc_t *)
+                                    malloc (sizeof(dmalloc_t));
         // these variable are now global.
         global_addr_->start_address = start_address;
         // ignore
-        global_addr_->permissions = permissions;
+        global_addr_->permissions = permission;
         global_addr_->data_start_address = NULL;
         return global_addr_;
     }
@@ -42,11 +56,11 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     // This is a variable stored in the local memory of the node. This is also
     // returned to the user making sure that the copy of the permission table
     // and the data start address is copied to the host as well.
-    global_addr_ = (struct s_dmalloc_entry *)
-                                    malloc (sizeof(struct s_dmalloc_entry));
+    global_addr_ = (dmalloc_t *)
+                                    malloc (sizeof(dmalloc_t));
     // these variable are now global.
     global_addr_->start_address = start_address;
-    global_addr_->permissions = permissions;
+    global_addr_->permissions = permission;
 
     // make sure that the participant count is set to 0 if I am the first host.
     if (get_participant_count() <= 0) {
@@ -55,79 +69,91 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
     }
     if (verbose) {
         // FIXME:
-        printf("info: global_addr_ %#lx is null %d",
+        printf("info: global_addr_ %#lx is null %d\n",
             (unsigned long) global_addr_, global_addr_ == NULL);
     }
     // Now make sure that this host has permissions to access the memory.
     // First, if I am host 0, then I'll have permission if the participant host
     // count is 0.
-    if (get_participant_count() == 0 && host_id == 0) {
+    if (get_participant_count() == 0 && context.host_id == 0) {
         // I'll get permission as I am the only one in the system!
         is_allowed = true;
-        // I need to create the head
-        create_head(host_id, permissions, verbose);
+        // I need to create the head. For the given range of memory, I'll
+        // give permission to the given context.
+        create_head(range, context, permission, verbose);
     }
-    else if (get_participant_count() > 0 && host_id == 0) {
+    else if (get_participant_count() > 0 && context.host_id == 0) {
         // I'm host 0 but my permission were revoked or I was kicked out
         // before. Therefore, we need to request permissions again to make sure
         // that I am legally allowed in!
         // TODO
         fatal("NotImplementedError! Host %d is 0 and trying to create a head "
-                "but there are other participants in the system. ", host_id);
+            "but there are other participants in the system. ",
+            context.host_id);
     }
-    else if (get_participant_count() == 0 && host_id > 0) {
+    else if (get_participant_count() == 0 && context.host_id > 0) {
         // I am the first one here but I am not the primary host. This makes it
         // complicated as I don't know what happened before. I'll ignore if
         // someone prior created the table or not, I'll just go ahead and
         // re-create the head.
         is_allowed = true;
-        create_head(host_id, permissions, verbose);
+        create_head(range, context, permission, verbose);
     }
-    else if (get_participant_count() > 0 && host_id > 0) {
+    else if (get_participant_count() > 0 && context.host_id > 0) {
         // I am a new participant host. First I need to request permissions by
         // proposing a new entry. While others vote, I wait. If the voting goes
         // through, I'll enter my proposed entry into the permission table.
         // TODO
         info("NotImplementedError! Host %d is trying to create a head "
-                "but there are other participants in the system. ", host_id);
+                "but there are other participants in the system. ",
+                context.host_id);
         // Let's try to implement this case
         // I am host 1. Host 0 has already created the head. I need to
         // propose an entry and wait until the voting is done.
-        struct table_entry *entry = 
-                    (struct table_entry *) malloc (sizeof(struct table_entry));
-        entry->domain_id = 1;
-        entry->permission = permissions;
+        entry_t *entry = (entry_t *) malloc (sizeof(entry_t));
+        // creates a process for the host with the process id. I am a new host
+        // and I want access to the memory. I propose an update.
+        entry->domain.context[0] = context;
+        // XXX:
+        entry->domain.valid_contexts = 1; // I can only get one context here.
+        entry->permission = permission;
+
         entry->shared_mask = 1; // this is a shared memory
         entry->is_valid = 1; // this is a valid entry. this notifies
                              // the FAM to create this entry in the permission
                              // table.
+        entry->is_dirty = 0; // this is not dirty yet. This will be set
+                             // to 1 when the entry is modified.
         // Now, I need to write this entry to the proposed section.
-        if (write_proposed_entry(host_id, entry) == true) {
+        if (write_proposed_entry(context.host_id, entry) == true) {
             // Now, I need to wait until the voting is done.
             while (get_count() <= get_participant_count() / 2) {
                 // wait until voting is done. How????
             }
             info("Voting is done for host %d. Now moving the proposed entry "
-                    "to the permission table.", host_id);
+                    "to the permission table.", context.host_id);
         }
         else {
             // This means that the entry was not written to the proposed section.
             // This is an error!
-            fatal("Failed to write the proposed entry for host %d", host_id);
+            fatal("Failed to write the proposed entry for host %d",
+                context.host_id);
         }
         // Now figure out the pointers to the shared memory section.
         is_allowed = true;
+        free(entry);
     }
     else {
         // This is an unhandled exception! We'll crash the program here!
         fatal("Unhandled exception while creating the head! "
                 "Info: participant count %d and host_id %d",
-                get_participant_count(), host_id);
+                get_participant_count(), context.host_id);
     }
 
     if (verbose || this_verbose) {
         info("verbose: %d, count: %d, host_id: %d, permissions: %d allowed: %d",
-            verbose, get_participant_count(), host_id, permissions, is_allowed);
+            verbose, get_participant_count(), context.host_id, permission,
+            is_allowed);
     }
     // The data segment of the flat memory will always start after 1 GiB. Why?
     if (is_allowed == true)
@@ -139,7 +165,7 @@ secure_alloc(size_t size, int host_id, int permissions, int test_mode,
 }
 
 void
-create_head(int host_id, int permissions, bool verbose) {
+create_head(range_t range, context_t context, bool permission, bool verbose) {
     // We need to make sure that the global_addr_ is not null. Why?
     printf("create_head: global_addr_ %#lx is null %d\n",
             (unsigned long) global_addr_, global_addr_ == NULL);
@@ -149,7 +175,8 @@ create_head(int host_id, int permissions, bool verbose) {
     // function. However, exception can happen when everyone else left the
     // shared memory and a new shared memory needs to be created and someone
     // else other than host_id 0 is trying to create this range.
-    if (host_id == 0 || (get_participant_count() == 0 && host_id > 0)) {
+    if (context.host_id == 0 || (get_participant_count() == 0 &&
+            context.host_id > 0)) {
         // The head can be created here
         // Create the initial entry at the start of the metadata
         while (write_lock(IDLE, -1) != true) {
@@ -157,38 +184,45 @@ create_head(int host_id, int permissions, bool verbose) {
             // exceptions.
         };
         // now lock the memory for me.
-        while (write_lock(WRITE, host_id) != true) {
+        while (write_lock(WRITE, context.host_id) != true) {
             // wait until the lock is acquired. This is done to handle
             // exceptions.
         }
         if (verbose)
             // print the status if the user wants to debug this.
-            info_who_locked(host_id);
+            info_who_locked(context.host_id);
         // since i am the only sharer now, I set this to 1.
         set_participant_count(1);
         // set participant id at the right index. This is a flat table, indexed
         // by the host_id directly!
-        set_participant_host_ids(host_id);
+        set_participant_host_ids(context.host_id);
         // Need to create a proposed entry but I am the only user. So I'll
         // override the proposed entry and create an entry directly in the 
         // permission table?
         // XXX: Disable direct entry into the permission table.
-        struct table_entry *entry =
-                    (struct table_entry *) malloc (sizeof(struct table_entry));
-        entry->domain_id = 0;
-        entry->permission = 1;
+        entry_t *entry =  (entry_t *) malloc (sizeof(entry_t));
+        // the range is defined by the user. This is the range of memory.
+        entry->range = range;
+        // We don't know that domain for this entry but we have the context.
+        entry->domain.context[0] = context;
+        entry->domain.valid_contexts = 1; // this is the first context
+        entry->permission = permission;
+
+        // TODO: Marked for deletion.
         entry->shared_mask = 1;
         entry->is_valid = 1; // this is a valid entry. this notifies the FAM
         // TODO: This entry will go through. The FAM must create this entry and
         // update the index.
-        write_proposed_entry(host_id, entry);
+        write_proposed_entry(context.host_id, entry);
+        // Free the local memory used to create the proposed entry.
+        free(entry);
 
         // that's it! Now unlock the memory
-        unlock(host_id);
+        unlock(context.host_id);
 
         if (verbose)
             // print the status if the user wants to debug this.
-            info_who_unlocked(host_id);
+            info_who_unlocked(context.host_id);
     }
     else {
         fatal("Cannot create head! There are others using the shared memory.");
