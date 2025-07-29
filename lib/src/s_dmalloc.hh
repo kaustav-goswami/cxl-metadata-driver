@@ -45,6 +45,11 @@
 // Standard definitions.
 #define ONE_G 0x40000000
 
+// The final thing missing in the design is the physical address as the
+// starting address instead of virtual addresses. The driver doesn't understand
+// virtual addresses. It's the job of the middleware to create that mapping!
+#define WHERE_AM_I 0x0
+
 // The first function is to do a secure dmalloc on a flat region of shared
 // memory across hosts.
 dmalloc_t* secure_alloc(size_t size, context_t context, bool permission,

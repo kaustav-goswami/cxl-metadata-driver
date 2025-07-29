@@ -27,7 +27,12 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
     // define multiple ranges.
     range_t range;
     if (context.host_id != FAM_ID) {
-        range.start = start_address + ONE_G;
+        // this is confusing as different processes will have a different
+        // virtual address. Instead of virtual addresses, we need to use
+        // physical addresses to create this entry.
+        range.vstart = start_address + ONE_G;
+        // starting physical address range of the data.
+        range.pstart = WHERE_AM_I + ONE_G;
         range.size = size - 1;
     }
 
@@ -116,6 +121,9 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
         // and I want access to the memory. I propose an update.
         entry->domain.context[0] = context;
         entry->range = range;
+        // make sure that the host id proposing the change is also present in
+        // the entry.
+        entry->initiator_host_id = context.host_id;
         // XXX:
         entry->domain.valid_contexts = 1; // I can only get one context here.
         entry->permission = permission;
@@ -124,8 +132,9 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
         entry->is_valid = 1; // this is a valid entry. this notifies
                              // the FAM to create this entry in the permission
                              // table.
-        entry->is_dirty = 0; // this is not dirty yet. This will be set
+        entry->is_del = 0; // this is not dirty yet. This will be set
                              // to 1 when the entry is modified.
+        entry->is_dirty = 0;
         // Now, I need to write this entry to the proposed section.
         if (write_proposed_entry(context.host_id, entry) == true) {
             // Now, I need to wait until the voting is done.
@@ -136,8 +145,8 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
                     "to the permission table.", context.host_id);
         }
         else {
-            // This means that the entry was not written to the proposed section.
-            // This is an error!
+            // This means that the entry was not written to the proposed
+            // section. This is an error!
             fatal("Failed to write the proposed entry for host %d",
                 context.host_id);
         }

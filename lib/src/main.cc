@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <assert.h>
 
 // #include "utility.hh"
 // #include "dmalloc.h"
@@ -32,12 +33,22 @@ int main(int argc, char **argv) {
     // if there areguments
     int my_host_id = MY_HOST_ID;
     size_t size = 0x80000000;
+    bool remove = false;
+
     if (argc > 1) {
         // info("Host ID is %s", argv[1]);
-        info("Host ID is %s", argv[1]);
+        printf("Host ID is %s\n", argv[1]);
         my_host_id = atoi(argv[1]);
-        if (argc > 2)
+
+        if (argc > 2) {
             size = (size_t) atoi(argv[2]) * 0x40000000;
+            printf("size : %zu \n", size);
+            if (argc > 3) {
+                // need to remove an entry
+                remove = true;
+                printf("remove is true\n");
+            }
+        }
     }
 
 
@@ -51,7 +62,8 @@ int main(int argc, char **argv) {
     bool test_mode = true;
     bool verbose = true;
 
-
+    entry_t static_entry;
+    printf("size: %d\n", sizeof(static_entry));
     // As a user I only know what memory I want for a given process.
     dmalloc_t *s_ptr = secure_alloc(size, context, permission, test_mode,
                                                                     verbose);
@@ -86,6 +98,33 @@ int main(int argc, char **argv) {
 
     // assume I am the FAM and lemme see the entire table.
     print_permission_table(MY_FAKE_HOST_ID);
+
+    // TODO: You need to implement and test this!
+    
+    if (remove) {
+        // create a context. Lets use the context from before
+        entry_t removal_entry;
+        // make this proposal as a deletion.
+        removal_entry.initiator_host_id = 1;
+        removal_entry.is_del = 1;
+        removal_entry.is_valid = 1;
+
+        // I only know who's permission I want to remove. If I want to get rid
+        // of my own permission, then the proposer and the context.host_id
+        // must match so that the PIDs are removed.
+        // Let's try to remove someone else's permission first.
+        // assert(my_host_id == 1);
+        removal_entry.domain.context[0].host_id = 2;
+        // IDK what is my virtual address or someone else's V.A but I know the
+        // physical address
+        removal_entry.range.pstart = WHERE_AM_I + ONE_G;
+        removal_entry.range.size = size - 1;
+        
+        // create a proposal to remove this entry. tell the s_permission to do
+        // this for you
+        write_proposed_entry(my_host_id, &removal_entry);
+
+    }
 
 
     // struct simple **list = (struct simple **) malloc (sizeof(struct simple *));

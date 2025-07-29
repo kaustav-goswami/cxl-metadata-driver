@@ -91,7 +91,8 @@ write_lock(int action, int host_id) {
             return true;
         }
         // if the lock is undefined
-        else if ((get_lock_status() < IDLE || get_lock_status() > WRITE) && host_id == -1) {
+        else if ((get_lock_status() < IDLE || get_lock_status() > WRITE) &&
+                                                            host_id == -1) {
             set_who_locked(-1);
             set_is_locked(IDLE); // set the state to IDLE
             return true;
@@ -119,20 +120,29 @@ write_proposed_entry(int host_id, entry_t *entry) {
     // This is always written into a fixed region of the memory. This cannot be
     // exposed as it is to the end user. Make sure to update this somewhere and
     // make it like an API.
-    // We need to write the values in entry to the proposed update
+    // We need to write the values in entry to the proposed update. I need to
+    // know if this is a update or a removal :(
     proposed_update->domain = entry->domain;
     proposed_update->range = entry->range;
+    // This is only valid when deleting an entry.
+    proposed_update->initiator_host_id = entry->initiator_host_id;
     proposed_update->permission = entry->permission;
     proposed_update->shared_mask = entry->shared_mask;
-    proposed_update->is_valid = entry->is_valid;
-    proposed_update->is_dirty = entry->is_dirty;
+    // we need fences.
+    proposed_update->is_del = entry->is_del;
+    asm volatile ("mfence" : : : "memory");
+    if (entry->is_valid == 1)
+    proposed_update->is_valid = 1;
     if (verbose)
-        info("Proposed entry written by host %d, pid %u at (%p, %lu) and domain %d",
+        printf("Proposed entry written by host %d, pid %u at (%p, %lu, %lu) and"
+            " domain %d and del bit %d\n",
             entry->domain.context[0].host_id,
             entry->domain.context[0].process_id[0],
-            entry->range.start,
+            entry->range.vstart,
+            entry->range.pstart,
             entry->range.size,
-            entry->domain.id);
+            entry->domain.id,
+            entry->is_del);
     // entry will be killed later.
     return true;
 }
@@ -151,6 +161,7 @@ void vote_entry(int host_id, int vote) {
 // everyone.
 bool create_and_wait_to_get_access(int host_id, entry_t *entry) {
     // This is the most complicated function IMHO
+    assert(false && "make sure this is not called\n");
     printf("create and waid %d ---- ", get_permission_table_index());
     if (write_proposed_entry(host_id, entry) == true) {
         // wait until voting is done.
@@ -340,7 +351,7 @@ void populate_table_entry(int host_id, entry_t proposal) {
         bool flag = false;
         for (int i = 0; i < get_permission_table_index(); i++) {
             // check if the host_id and the process_id matches
-            if (head[i].range.start == proposal.range.start &&
+            if (head[i].range.pstart == proposal.range.pstart &&
                     head[i].range.size == proposal.range.size &&
                     head[i].permission == proposal.permission) {
                 // This means that the entry already exists. We can merge the
@@ -390,6 +401,13 @@ void populate_table_entry(int host_id, entry_t proposal) {
 bool remove_table_entry(int host_id, entry_t proposal) {
     // similar to the populate version of the function but returns a boolean
     // value depending upon whether an entry was found and deleted or not.
+    // @params
+    // :host_id: the caller's host_id. In the centralized version, this must
+    //              be the FAM.
+    // :proposal: the values of the proposed entry.
+
+    // this host_id is the one calling this function. It must be the fam.
+    assert(host_id == FAM_ID);
 
     // XXX: Entries cannot be per process. If a host says that it wants to
     // remove access of another host, then it only know that hosts' id not the
@@ -402,12 +420,15 @@ bool remove_table_entry(int host_id, entry_t proposal) {
     // the memory range must match. for a given range of memory, if the
     // proposed host has access to the memory, remove that host from accessing
     // the memory anymore.
+    print_proposed_update(host_id);
     entry_t *head = get_permission_table(host_id);
     for (int i = 0 ; i < get_permission_table_index(); i++) {
-        // compare the range.
-        if (head[i].range.start == proposal.range.start &&
-                head[i].range.size == proposal.range.size &&
-                head[i].permission == proposal.permission) {
+        // compare the range and the host.
+        if (head[i].range.pstart == proposal.range.pstart &&
+                head[i].range.size == proposal.range.size) {
+            if (verbose)
+                printf("found the entry from %zu to size %zu\n",
+                        proposal.range.pstart, proposal.range.size);
             // found the range, now compare if proposed->host_id has access or
             // not. The victim host will always be at 0th index of the domain
             // context.
@@ -431,7 +452,7 @@ bool remove_table_entry(int host_id, entry_t proposal) {
                         warn("This version of the code does not rearrange the"
                                                                     " table");
                         // All the access rights of this host is completely
-                        // removed! 
+                        // removed!
                     }
                 }
             }
@@ -489,6 +510,7 @@ bool move_proposed_entry(int host_id) {
 
     // reset the proposed entry
     set_valid_bit();
+    proposal->is_del = 0;
     // proposal->is_valid = false;
 
 
@@ -519,8 +541,14 @@ bool remove_proposed_entry(int host_id) {
     }
     // The entry is ready in the update section.
     entry_t *proposal = get_proposed_entry();
+    
     // TODO: Ignore voting in this version. Fix it later.
-    entry_t *head = get_permission_table(host_id);
+    *count = MAX_PARTICIPANT_COUNT;
+    remove_table_entry(host_id, *proposal);
+
+    // reset the proposed entry.
+    set_valid_bit();
+    proposal->is_del = 0;
 
     // TODO: See if this request can be merged?
     // Now, search the host and the context_id to match an entry and remove the
@@ -534,6 +562,10 @@ bool remove_proposed_entry(int host_id) {
 
     // unlock the lock
     unlock(host_id);
+    if (verbose) {
+        info("Host %d successfully updated the permission table.\n", host_id);
+        print_permission_table(host_id);
+    }
 
     return true;
 }
@@ -572,11 +604,12 @@ void print_proposed_update(int host_id) {
         fatal("Host %d is not allowed to see the proposed update!", host_id);
     }
     entry_t *entry = get_proposed_entry();
-    info("Proposed entry by host %d: process_id: %d, permission: %d, "
-            "shared_mask: %d, is_valid: %d\n",
+    printf("Proposed entry by host %d: process_id: %d, permission: %d, "
+            "shared_mask: %d, is_valid: %d is_del %d, start %zu size %zu\n",
             host_id, entry->domain.context[0].process_id[0],
             entry->permission,
-            entry->shared_mask, entry->is_valid);
+            entry->shared_mask, entry->is_valid, entry->is_del,
+        entry->range.pstart, entry->range.size);
 }
 
 void print_vote_count(int host_id) {
@@ -590,23 +623,24 @@ void print_vote_count(int host_id) {
 
 void print_single_entry(entry_t *entry) {
     
-        // The entry can have multiple sub-entries!
-        printf(" %d \t\t", entry->domain.id);
+    // The entry can have multiple sub-entries!
+    printf(" %d \t\t", entry->domain.id);
 
-        for (int j = 0; j < entry->domain.valid_contexts; j++) {
-            // print the host_id and process_id
-            printf("[(%d, [", entry->domain.context[j].host_id);
-            for (int k = 0; k < entry->domain.context[j].valid_processes; k++) {
-                printf("%u, ", entry->domain.context[j].process_id[k]);
-            }
-            printf("]), ");
+    for (unsigned int j = 0; j < entry->domain.valid_contexts; j++) {
+        // print the host_id and process_id
+        printf("[(%d, [", entry->domain.context[j].host_id);
+        for (unsigned int k = 0; k < entry->domain.context[j].valid_processes; k++) {
+            printf("%u, ", entry->domain.context[j].process_id[k]);
         }
-        printf("] \t");
+        printf("]), ");
+    }
+    printf("] \t");
 
-        printf("(%p, %lu) \t", entry->range.start, entry->range.size);
-        printf(" %d \t %d \t %d \t %d \n",
-               entry->permission, entry->shared_mask,
-               entry->is_dirty, entry->is_valid);
+    printf("(%p, %lu, %lu) \t",
+        entry->range.vstart, entry->range.pstart, entry->range.size);
+    printf(" %d \t %d \t %d \t %d \n",
+            entry->permission, entry->shared_mask,
+            entry->is_del, entry->is_valid);
 
 }
 
@@ -617,15 +651,17 @@ void print_permission_table(int host_id) {
         // if I am a participant host with valid permissions, I should be able
         // to see the permission table.
         // handle overflow!
-        if (participant_host_ids[host_id] == false && host_id < get_participant_count()) {
-            fatal("Host %d is not allowed to see the permission table!", host_id);
+        if (participant_host_ids[host_id] == false &&
+                                         host_id < get_participant_count()) {
+            fatal("Host %d is not allowed to see the permission table!",
+                                                                    host_id);
         }
     }
     printf("Permission table has %d entries:\n", get_permission_table_index());
     printf("----------------------------------------------------"
         "--------------------------------------------------\n");
-    printf(" domain_id \t [(host_id, [pid])] \t (start, end) \t "
-        "permission \t shared_mask \t is_dirty \t is_valid\n");
+    printf(" domain_id \t [(host_id, [pid])] \t (vstart, pstart, end) \t "
+        "permission \t shared_mask \t is_del \t is_valid\n");
     printf("----------------------------------------------------"
         "--------------------------------------------------\n");
 
@@ -645,10 +681,11 @@ void print_permission_table(int host_id) {
         }
         printf("] \t");
 
-        printf("(%p, %lu) \t", head[i].range.start, head[i].range.size);
+        printf("(%p, %lu, %lu) \t",
+            head[i].range.vstart, head[i].range.pstart, head[i].range.size);
         printf(" %d \t %d \t %d \t %d \n",
                head[i].permission, head[i].shared_mask,
-               head[i].is_dirty, head[i].is_valid);
+               head[i].is_del, head[i].is_valid);
         printf("----------------------------------------------------"
             "--------------------------------------------------\n");
     }
@@ -710,7 +747,8 @@ void monitor_update_old(int host_id, int* start_address) {
                     // FAM cannot be crashed at any point. If this happens, the
                     // entire memory needs to be wiped out to prevent memory
                     // leak!
-                    fatal("Failed to move the proposed entry to the permission table");
+                    fatal("Failed to move the proposed entry to the permission"
+                        " table");
                 }
             }
         }
@@ -727,7 +765,9 @@ void monitor_update(int host_id, int* start_address) {
     while (true) {
         // monitor the proposed update section.
         entry_t *old_entry = get_proposed_entry();
-        printf("valid bit: %d \t entries %d\n", old_entry->is_valid, get_permission_table_index());
+        printf("valid bit: %d is_del %d \t entries %d\n", old_entry->is_valid,
+                                                old_entry->is_del,
+                                                get_permission_table_index());
         if (old_entry->is_valid == 1) {
             // This means that the entry is  valid. This is a lazy
             // implementation.
@@ -736,7 +776,16 @@ void monitor_update(int host_id, int* start_address) {
             info("changes detected in the proposed update section by host %d",
                     get_who_locked());
             // move this entry to the permission table
-            move_proposed_entry(host_id);
+            // see if this is an addition or deletion
+            if (old_entry->is_del == 1) {
+                info("Host %d wants to remove permissions",
+                                                old_entry->initiator_host_id);
+                remove_proposed_entry(host_id);
+            }
+            else {
+                info("id del bit %d", old_entry->is_del);
+                move_proposed_entry(host_id);
+            }
             // reset the proposed entry
             // old_entry->is_valid = 0; // reset the valid bit
             // if this is a new update, set the vote to high number
@@ -754,7 +803,8 @@ void unoptimized_monitor_and_wait(volatile void *addr) {
     // This is an unoptimized version of the monitor and wait function.
     // It uses the monitor and mwait instructions to wait for a change in the
     // memory location pointed by addr.
-    fatal("NotImplementedError: unoptimized_monitor_and_wait is not implemented yet!");
+    fatal("NotImplementedError: unoptimized_monitor_and_wait is not"
+        " implemented yet!");
 }
 
 void monitor_and_wait(volatile void *addr) {

@@ -101,8 +101,8 @@ typedef struct s_dmalloc_entry dmalloc_t;
 #define IS_LOCKED 0
 #define WHO_LOCKED (IS_LOCKED + sizeof(int))
 #define PARTICIPANT_COUNT (WHO_LOCKED + sizeof(int))
-#define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + sizeof(int)) // ))
-#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + (MAX_PARTICIPANT_COUNT * sizeof(int))) // 
+#define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + sizeof(int))
+#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + (MAX_PARTICIPANT_COUNT * sizeof(int)))
 #define COUNT (PROPOSED_UPDATE + sizeof(entry_t))
 #define INDEX_COUNT (COUNT + sizeof(int))
 #define PERMISSION_TABLE (INDEX_COUNT + sizeof(int))
@@ -148,8 +148,10 @@ struct domain {
 };
 
 struct range {
-    // The start address of the range.
-    int* start;
+    // The start address of the range in virtual addressing.
+    int* vstart;
+    // Physical address
+    Addr pstart;
     // this size needs to be bytes.
     size_t size;
 };
@@ -173,8 +175,13 @@ struct table_entry {
     // The hosts who share this memory segment. 
     // TODO: Marked for deletion.
     int shared_mask;
-    // Here are a couple of more bits to assign dirty and valid bits
+    // Here are a couple of more bits to assign dirty and valid bits. 
+    // Make sue that there is a is_del boolean.
+    bool is_del;
+    // a boolean used to mark dirty entries for BI. Must be implemented in the
+    // hardware!
     bool is_dirty;
+    // A is_valid is needed to trigger the FAM or the consensus mechanism.
     bool is_valid;
 };
 
