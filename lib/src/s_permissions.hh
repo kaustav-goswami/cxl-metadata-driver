@@ -91,7 +91,7 @@ typedef struct s_dmalloc_entry dmalloc_t;
 // Hardcoded sections. Max number of participant hosts is 1024
 // FIXME:
 #define MAX_PARTICIPANT_COUNT 1024
-#define MAX_CONTEXT 8
+#define MAX_CONTEXT 16384
 #define MAX_PROCESSES 8
 // The head is hardcoded to 1G of memory.
 #define TABLE_SIZE 0x40000000

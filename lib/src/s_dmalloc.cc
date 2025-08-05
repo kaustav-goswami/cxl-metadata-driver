@@ -175,6 +175,38 @@ secure_alloc(size_t size, context_t context, bool permission, int test_mode,
     
 }
 
+void request_extension(dmalloc_t *s_ptr, int host_id, range_t range, context_t context, bool permission,
+                                                                bool verbose) {
+    // The previously created process can request for more entries in the
+    // permission table. It needs to use the same context as before.
+    assert(s_ptr->start_address != NULL);
+
+    // do i have a global_addr_?
+    assert(global_addr_ == s_ptr);
+
+    // I'll just write a new proposal to the update section.
+    entry_t *entry =  (entry_t *) malloc (sizeof(entry_t));
+    // the range is defined by the user. This is the range of memory.
+    entry->range = range;
+    // We don't know that domain for this entry but we have the context.
+    entry->domain.context[0] = context;
+    entry->domain.valid_contexts = 1; // this is the first context
+    entry->permission = permission;
+
+    // TODO: Marked for deletion.
+    entry->shared_mask = 1;
+    entry->is_valid = 1; // this is a valid entry. this notifies the FAM
+    // TODO: This entry will go through. The FAM must create this entry and
+    // update the index.
+    write_proposed_entry(context.host_id, entry);
+    // Free the local memory used to create the proposed entry.
+    free(entry);
+
+    // that's it! Now unlock the memory
+    unlock(context.host_id);
+
+}
+
 void
 create_head(range_t range, context_t context, bool permission, bool verbose) {
     // We need to make sure that the global_addr_ is not null. Why?
@@ -391,7 +423,7 @@ shmalloc(size_t size, int host_id) {
     // A pointer to the mmap call
     //
     // XXX: WARNING, COHERENCE IS NOT ENFORCED when opening the file!
-    int fd = shm_open("/my_shmem2", O_CREAT | O_RDWR | O_LARGEFILE, 0666);
+    int fd = shm_open("/my_shmem3", O_CREAT | O_RDWR | O_LARGEFILE, 0666);
     if (fd == -1) {
         perror("shm_open");
         exit(EXIT_FAILURE);

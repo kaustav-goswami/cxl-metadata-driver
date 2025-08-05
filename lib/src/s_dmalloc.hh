@@ -54,6 +54,12 @@
 // memory across hosts.
 dmalloc_t* secure_alloc(size_t size, context_t context, bool permission,
                         int test_mode, bool verbose);
+// TODO:
+// There is no way I can extend the permission table with my existing ptr.
+// on the existing s_ptr, there needs to be a way to extend the permission
+// table with new entries.
+void request_extension(dmalloc_t *s_ptr, int host_id, range_t range, context_t context, bool permission,
+                                                                bool verbose);
 // Now that we have created the mmap segment, we need to create the head if we
 // are the primary host
 void create_head(range_t range, context_t context, bool permission,

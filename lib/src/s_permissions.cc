@@ -691,7 +691,7 @@ void print_permission_table(int host_id) {
     }
 }
 
-context_t *create_context(int host_id, unsigned int *process_id,
+context_t *create_context(int host_id, unsigned int process_id[8],
         unsigned int valid_processes) {
     // This function creates a context for the user. This is used to create a
     // context for the user.
