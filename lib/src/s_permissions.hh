@@ -3,6 +3,51 @@
 
 /* This program manages a flat memory range in a distributed manner. */
 
+/*
+In this optimized version of the implementation, we use a 64B cache line
+to store the metadata of the shared memory region.
+
+* this is an entry *
+process id (53b) -- The process ID % 53.
+
+hosts' bit index (64 bits) -- binary of the hosts sharing the memory. Can
+                                be upto 61 bits/hosts.
+
+start_address (64 bits) -- 
+end_address (64 bits) -- 
+
+* THIS IS FLIPPED *
+_________________________________________________________________
+| start | end | valid bit |permissions | process_id | host_mask |
+|______ |_____|___________|____________|____________|___________|
+<-64b--><64b--><-----1b---><-----2b-----><---125b---><---256b--->
+
+For similicity of this implementation, we are using regular numbers. I don't
+want to do bit manipulation
+
+
+___________________________________________________________________________
+| start | end | valid bit | permissions | process_id | host_mask | unused |
+|______ |_____|___________|_ ___________|____________|___________|________|
+<-64b--><64b--><----8b---><-----32b-----><-----64b---><---64b---><-216b-->
+
+unused bits -> 32 Bytes! We can add another 256 hosts or contexts!
+
+
+
+-- 8B --
+
+-- 24B --
+
+update proposal entry (64 start + 64 end + 64) -- The suggested proposal by a
+                participant host to either UPDATE or REVOKE permissions of
+                a domain or a host.
+% vote count -- lg(64) = 8 bits
+
+% -- 64B -- %
+%% Permission table follows
+*/
+
 /* The goal of the project is to create a a flat memory range in the remote
 memory that is managed by the opearting systems of each host. Standard shared
 memory protocols are used to write into this memory range. Here are the key
@@ -45,11 +90,21 @@ the critical section of the code. The host that has the write lock before
 making changes to the table.
 
 // FIXME: Number of entries in the permission table is not defined.
-______________________________________ .. _____________________________________ .. ____
-| is     | who    | participant | participant | proposed | vote  | table | entries    |
-| locked | locked | count (N)   | host IDs    | update   | count | count |            |   
-|________|________|_____________|_____ .. ____|__________|_______|_______|_____ .. ___|
-<--4B---><--4B---><-----4B-----><----N*4B----><--entry--><--4B--><-- entries ->
+__________________________________________________________________________________ .. ____
+| is     | who    | participant | proposed | init. | vote  | table | unused | permission |
+| locked | locked | count (N)   | update   | host  | count | count | space  | table      |   
+|________|________|_____________|__________|_______|_______|_______|________|_____ .. ___|
+<--4B---><--4B---><-----4B-----><----64B---><--4B--><--4B--><--4B--><--40B--><-- entries ->
+
+
+Assuming the total remote mmemory size could be up to 1 TB, 16 GiB of memory
+needs to be reserved for ACM.
+
+For a more practical use-case, we'll reserve 1 GiB of the initial memory for
+storing the permission table. This can maintain up to 16.7M permission entries.
+
+We assume that the total number of hosts to be 256 - 1 (FAM) and each host can
+have up to 128 processes sharing the remote memory.
 
 * Limitations *
 1. Since the testing infrastructure is purely shm based, even if addresses are
@@ -90,20 +145,54 @@ typedef struct s_dmalloc_entry dmalloc_t;
 
 // Hardcoded sections. Max number of participant hosts is 1024
 // FIXME:
-#define MAX_PARTICIPANT_COUNT 1024
-#define MAX_CONTEXT 16384
-#define MAX_PROCESSES 8
-// The head is hardcoded to 1G of memory.
+#define MAX_PARTICIPANT_COUNT 64
+
+#define UNUSED_SIZE 27
+
+#define MAX_CONTEXT 64
+#define MAX_PROCESSES 64
+// The head is hardcoded to 1G of memory. This can store 16.7M entries. The
+// first 128 Bytes is reserved for management.
+// All hosts can read and write into this section. For unauthorized/hogging
+// issues, it is assumed that the FAM kicks out any hoarders.
 #define TABLE_SIZE 0x40000000
-// FAM needs to have a fixed ID
-#define FAM_ID -2
-// Define the offsets
+#define MAX_TABLE_ENTRIES 16777214
+
+// FAM needs to have a fixed ID. Keep this as 0 or max. This is important.
+#define FAM_ID MAX_PARTICIPANT_COUNT - 1
+// there are no offsets here, just binary bits. The entry size if 64 BYTES!
+// 64 bits per uint8_t
+// #define IS_LOCKED   0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// #define WHO_LOCKED  0b0111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// #define PERMISSIONS 0b0000_0000_0110_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// #define PID         0b0000_0000_0001_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define HOST_MASK   0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define START       0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define END         0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define UPDATE      0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// #define VOTE_COUNT  0b0111_1111_1110_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// using 49 bits as of now.
+
+// #define START       0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define END         0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define PERMISSIONS 0b1100_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
+// #define PID         0b0011_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+// #define HOST_MASK   0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+
+#define PID_MASK        0b0011111111111111111111111111111111111111111111111111
+#define PERMISSION_MASK 0b1100000000000000000000000000000000000000000000000000
+#define FULL_MASK       0b1111111111111111111111111111111111111111111111111111
+
+#define START_ADDRESS 0
+
 #define IS_LOCKED 0
 #define WHO_LOCKED (IS_LOCKED + sizeof(int))
 #define PARTICIPANT_COUNT (WHO_LOCKED + sizeof(int))
-#define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + sizeof(int))
-#define PROPOSED_UPDATE (PARTICIPANT_HOST_IDS + (MAX_PARTICIPANT_COUNT * sizeof(int)))
-#define COUNT (PROPOSED_UPDATE + sizeof(entry_t))
+// #define PARTICIPANT_HOST_IDS (PARTICIPANT_COUNT + sizeof(int))
+#define PROPOSED_UPDATE (PARTICIPANT_COUNT + sizeof(int))
+#define INITIATOR (PROPOSED_UPDATE + sizeof(entry_t))
+
+#define COUNT (PROPOSED_UPDATE + sizeof(int))
 #define INDEX_COUNT (COUNT + sizeof(int))
 #define PERMISSION_TABLE (INDEX_COUNT + sizeof(int))
 
@@ -114,7 +203,6 @@ typedef struct s_dmalloc_entry dmalloc_t;
 // microseconds.
 #define FAM_SLEEP 1000000
 
-
 // Define the state enum. This is used to manage the reading and writing the
 // metadata of the shared memory (aka the head).
 enum states {
@@ -123,6 +211,9 @@ enum states {
     WRITE
 };
 
+// In this version, we don;t need to explicitly define a context.
+
+/* Obsolete version of the code 
 // A domain is defined as a combination of host_id and the process_id. Can also
 // the cr3.
 struct context {
@@ -155,39 +246,36 @@ struct range {
     // this size needs to be bytes.
     size_t size;
 };
+*/
 
-// Define the structure of the permission table.
-//
+// Define the structure of the permission table. this is the optimized version
+// of the permission table, which needs to be bit manipulated. This can be upto
+// 64 Bytes AKA a cache line size.
+
+// _________________________________________________________________
+// | start | end | valid bit |permissions | process_id | host_mask |
+// |______ |_____|___________|____________|____________|___________|
+// <-64b--><64b--><-----1b---><-----2b-----><---125b---><---256b--->
+// <--------------------------- 64 Bytes -------------------------->
+
 struct table_entry {
-    // The context ID (aka PCID, set of PCID or a VMID)
-    domain_t domain;
-    range_t range;
-    // A dedicated host_id is needed, mostly for removing entries. This is the
-    // host which wants to either remove someone else's access
-    // (domain.context[0].host_id). yes [0] is fixed. and can remove up to
-    // MAX_PROCESSES. This will always be ignore unless removing entries;
-    // TODO: Make a validity check!
-    int initiator_host_id;
-    // The permission bit. This only needs to be either a read or a write. Page
-    // permissions already has an execute bit, which we can simply ignore in
-    // the hardware.
-    bool permission;
-    // The hosts who share this memory segment. 
-    // TODO: Marked for deletion.
-    int shared_mask;
-    // Here are a couple of more bits to assign dirty and valid bits. 
-    // Make sue that there is a is_del boolean.
-    bool is_del;
-    // a boolean used to mark dirty entries for BI. Must be implemented in the
-    // hardware!
-    bool is_dirty;
-    // A is_valid is needed to trigger the FAM or the consensus mechanism.
-    bool is_valid;
+    uint64_t start;             // 64 bits
+    uint64_t end;               // 64 bits
+
+    bool is_valid;                 // 8 bits
+    int permission;             // 32 bits
+
+    uint64_t pid_mask;          // 64 bits
+    uint64_t host_mask;         // 64 bits
+
+    uint8_t unused[UNUSED_SIZE];         // 216 bits
 };
 
-// Define the secured structure of the pointer to the mmaped regions
+// Define the secured structure of the pointer to the mmaped regions. This
+// structure deals purely in virtual addresses.
 struct s_dmalloc_entry {
     int* start_address;
+    // Metadata is located before the permission table.
     int *data_start_address;
     int permissions;
 };
@@ -200,8 +288,9 @@ extern bool verbose;                    // verbose is set by the parent
 extern int* is_locked;                  // assigning is locked as a variable
 extern int* who_locked;                 // similar
 extern int* participant_count;
-extern int* participant_host_ids;
+// extern int* participant_host_ids;
 extern entry_t* proposed_update;
+extern int* initiator;
 extern int* count;
 // This is a flat table of the permission entries.
 extern entry_t* permission_table;
@@ -212,17 +301,41 @@ extern int domains;
 
 // All the functions are declared here for better book-keeping!
 
+// -------------------- initialization ------------------------------------- //
 // First we need to assign the variables to the flat memory region so that we
 // can manage this memory better. This is the management structure defined in
 // the beginning. Regardless whoami, the metadata always has read permissions
 // to any new host.
 void assign_all_global_variables(int* start_address, bool this_verbose);
+
+// -------------------------------- lock ----------------------------------- //
 // what's the current status of the lock?
 int get_lock_status();
 // We first need a lock writer.
 bool write_lock(int action, int host_id);
-// Then we need a data writer
+// Finally we need an unlock function to unlock the metadata.
+bool unlock(int host_id);
+// Here are the utility setter and getter functions for the flat memory range.
+int get_is_locked();
+void set_is_locked(int action);
+int get_who_locked();
+void set_who_locked(int host_id);
+
+// ------------------------------ entry management ------------------------- //
+// Then we need a data writer. this function writes a given entry to the
+// `proposed_update` section
 bool write_proposed_entry(int host_id, entry_t *entry);
+// Returns the proposed entry section.
+entry_t* get_proposed_entry();
+// void set_proposed_entry(entry_t* entry);
+
+// ----------------------------- table management -------------------------- //
+// gets the permission table's head. I DONT UNDERSTAND THIS FUNCTION.
+void allocate_table();
+// We need a couple of setter and getter for the FAM also
+void populate_table_entry(int host_id, entry_t proposal);
+
+// --------------------------- consensus mechanism ------------------------- //
 // We need a voter!
 void vote_entry(int host_id, int vote);
 // The FAM needs to reset the vote counter after moving the entry from the
@@ -232,23 +345,17 @@ bool reset_vote();
 void reset_count();
 // We need a function to create a new entry and wait until it gets approved by
 // everyone.
-bool create_and_wait_to_get_access(int host_id, entry_t *entry);
-// Finally we need an unlock function to unlock the metadata.
-bool unlock(int host_id);
-// Here are the utility setter and getter functions for the flat memory range.
-int get_is_locked();
-void set_is_locked(int action);
-int get_who_locked();
-void set_who_locked(int host_id);
+// bool create_and_wait_to_get_access(int host_id, entry_t *entry);
 int get_participant_count();
 // This must be set in consensus
 void set_participant_count(int participant_count);
 // Returns the integer stored at the index offset
-int get_participant_host_ids(size_t index);
-void set_participant_host_ids(size_t index);
-entry_t* get_proposed_entry();
-void set_proposed_entry(entry_t* entry);
+// int get_participant_host_ids(size_t index);
+
+// void set_participant_host_ids(size_t index);
+
 int get_count();
+
 // Sets an integer to vote. Is in between 0 and 1.
 void set_count(int my_count);
 // returns a pointer to the start of the permission table.
@@ -268,8 +375,6 @@ context_t* create_context(int host_id, unsigned int* process_id,
 bool move_proposed_entry(int host_id);
 // TODO: Marked for deletion
 bool remove_proposed_entry(int host_id);
-// We need a couple of setter and getter for the FAM also
-void populate_table_entry(int host_id, entry_t proposal);
 bool remove_table_entry(int host_id, entry_t proposal);
 
 int get_permission_table_count();
@@ -296,5 +401,10 @@ void monitor_update(int host_id, int* start_address);
 void monitor_and_wait(volatile void *addr);
 
 // All function definitions are here!
+// For the cache line version, there are a couple of bitoperation functions
+
+// inline void set_start_address(size_t start) {
+
+// }
 
 #endif // __S_PERMISSIONS_HH__
