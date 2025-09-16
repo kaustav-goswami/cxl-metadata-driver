@@ -1,6 +1,57 @@
 #include "s_dmalloc.hh"
 
 dmalloc_t*
+secure_init(size_t size, int host_id, int test_mode, unsigned int process_id, bool this_verbose) {
+    // if size is 0x0 then allocate the entire /dev/dax to this host
+    if (size == 0x0)
+        // this needs to be hardcoded! Right now it allocates 4 GiB of memory.
+        size = 0x100000000;
+
+    // the mmap call will be done for the entire memory region but the host
+    // cannot simply read or write into the memory. the head will be visible
+    // to the user if the voting goes through.
+
+    // TODO: make sure to assign the global variables correctly
+    global_addr_ = (dmalloc_t *) malloc (sizeof(dmalloc_t));
+    if (test_mode == 0)
+        global_addr_->start_address = dmalloc(size, host_id);
+    else if (test_mode == 1)
+        global_addr_->start_address = shmalloc(size, host_id);
+    else
+        // Illegal operation
+        fatal("Cannot create memory region without a valid test mode (%d)",
+                test_mode);
+    
+    // it is unlikely that the init will fail.
+
+    // ignore this permission
+    global_addr_->permissions = 0x0;
+
+    // XXX
+    // don't worry about creating permissions rn. the user/middleware will be
+    // responsible for doing this.
+
+    // I'll jsut assume that after 1 GiB, the actual data starts.
+    // Since this is the first time anyone is calling this function from this
+    // host, make sure that the global variables are setup and the start
+    // addresses aren't passed around functions.
+    assign_all_global_variables(global_addr_->start_address, this_verbose);
+
+    // This is a variable stored in the local memory of the node. This is also
+    // returned to the user making sure that the copy of the permission table
+    // and the data start address is copied to the host as well.
+    global_addr_ = (dmalloc_t *) malloc (sizeof(dmalloc_t));
+    
+    // ignore this permissions
+    global_addr_->permissions = 0x0;
+
+    // the FAM knows where does the data starts
+    global_addr_->data_start_address = NULL;
+
+    return global_addr_;
+}
+
+dmalloc_t*
 secure_alloc(size_t size, context_t context, bool permission, int test_mode,
                                                         bool this_verbose) {
     // Simple step here is to create a s_dmalloc_entry to store the start

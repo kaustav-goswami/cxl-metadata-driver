@@ -128,6 +128,7 @@ be tested and verified with dedicated hardware implemented via gem5.
 #include <stdbool.h>
 #include <assert.h>
 #include <time.h>
+#include <math.h>
 #include <unistd.h>
 
 #include "utility.hh"
@@ -259,8 +260,8 @@ struct range {
 // <--------------------------- 64 Bytes -------------------------->
 
 struct table_entry {
-    uint64_t start;             // 64 bits
-    uint64_t end;               // 64 bits
+    Addr start;             // 64 bits
+    Addr end;               // 64 bits
 
     bool is_valid;                 // 8 bits
     int permission;             // 32 bits
@@ -366,6 +367,7 @@ entry_t* create_new_permission_entry();
 // the memory. This is used to create a context for the user.
 context_t* create_context(int host_id, unsigned int* process_id,
                           unsigned int valid_processes);
+entry_t *create_entry(Addr start, Addr end, int permission, int host_id, unsigned int process_id)
 
 // How is the main permission table managed? Ideally this needs to be managed
 // by the hardware. IDK how but the secure trusted hardware needs to get

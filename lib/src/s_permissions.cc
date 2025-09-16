@@ -791,6 +791,51 @@ void print_permission_table(int host_id) {
     }
 }
 
+uint64_t get_bit_decimal(unsigned int bounded_number, bool type) {
+    // this is a utility function that returns a uint64_t with the 
+    // `bounded_process_id` set in a uint64_t data
+    //
+    // bounded_number - a host or a process that the user wants to convert
+    // type - [0] this is a host number [1] this is a process id.
+
+    if (!type) // this is a host number and must be -1 for the FAM
+        assert(bounded_number >= 0 && bounded_number < MAX_PARTICIPANT_COUNT);
+    else 
+        assert(bounded_number >= 0 && bounded_number < MAX_PROCESSES);
+    
+    return pow(2, bounded_number + 1);
+
+}
+
+entry_t *create_entry(Addr start, Addr end, int permission, int host_id, unsigned int process_id) {
+    // creates a new entry that will be written into the proposed section
+    // in this version we are directly written into the proposed section
+
+    entry_t *new_entry = (entry_t *) malloc (sizeof(entry_t));
+
+    // TODO: the FAM needs to append permissions if necessary.
+    new_entry->start = start;
+    new_entry->end = end;
+    
+    // a new fuction is needed to convert integers from int to a bit in a bit
+    // vector.
+    new_entry->pid_mask = get_bit_decimal(process_id % MAX_PROCESSES, true);
+    new_entry->host_mask = get_bit_decimal(host_id, false);
+
+    new_entry->is_valid = false;
+    new_entry->permission = permission;
+    
+    // create the rest of the data
+    return new_entry;
+
+
+}
+
+
+
+
+// this is the old version of the driver. this needs to be updated. Mkae this
+// an API
 context_t *create_context(int host_id, unsigned int process_id[8],
         unsigned int valid_processes) {
     // This function creates a context for the user. This is used to create a

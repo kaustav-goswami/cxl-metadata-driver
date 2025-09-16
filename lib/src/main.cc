@@ -56,7 +56,15 @@ int main(int argc, char **argv) {
     // unsigned int my_process_id[1] = { (unsigned int) getpid() };
     // context_t context = *create_context(
     //                             my_host_id, my_process_id, 1);
-    context_t context = {my_host_id, {(unsigned int) getpid(), 0, 0, 0, 0, 0, 0, 0}, 1};
+
+    entry_t entry = create_entry();
+
+    // decouple initialization and allocation! Always request the shared memory
+    // region (entire) as the user but actual read/write permissions are
+    // assigned later.
+
+
+    // context_t context = {my_host_id, {(unsigned int) getpid(), 0, 0, 0, 0, 0, 0, 0}, 1};
     // A single bit represents permissions: 0 -> read, 1 -> read/write
     bool permission = 0b1;
     bool test_mode = true;
