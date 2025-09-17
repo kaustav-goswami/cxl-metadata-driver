@@ -25,7 +25,7 @@
 #include "utility.hh"
 
 #define VERBOSE 1
-#define MY_HOST_ID -2
+#define MY_HOST_ID FAM_ID
 
 void *mon_udpate(void *start_address) {
     // This is the FAM's function that monitor and updates the permission table
@@ -48,31 +48,45 @@ int main() {
     // none of the hosts can access the memory.
     munmap_memory(2, 1, 0); // reset the memory as the root user is done.
 
-    // define my context! We need a better looking function :(
-    context_t context = {MY_HOST_ID, {(unsigned int) getpid(),
-                                                    0, 0, 0, 0, 0, 0, 0}, 1};
-    // A single bit represents permissions: 0 -> read, 1 -> read/write
-    bool permission = 0b1;
+
+    size_t size = 0x0;      // specify 0 to get access to the entire memory
+    int permission = 0x2;  // 0x0 -> no access, 0x1 -> read only, 0x2 rw-
+
     bool test_mode = true;
     bool verbose = true;
 
-    const size_t size = 0x100000000; // size of the memory to allocate.
+    int host_id = MY_HOST_ID;
+
+    // make sure to initializae the memory with the pid.
+    dmalloc_t *s_ptr = secure_init(size, host_id, permission, test_mode, verbose);
+
+
+    // define my context! We need a better looking function :(
+    // context_t context = {MY_HOST_ID, {(unsigned int) getpid(),
+    //                                                 0, 0, 0, 0, 0, 0, 0}, 1};
+
+    // A single bit represents permissions: 0 -> read, 1 -> read/write
+    // bool permission = 0b1;
+    // bool test_mode = true;
+    // bool verbose = true;
+
+    // const size_t size = 0x100000000; // size of the memory to allocate.
 
     // Allocation as the FAM always goes through!
-    dmalloc_t *sptr = secure_alloc(size, context, permission, test_mode, verbose);
+    // dmalloc_t *sptr = secure_alloc(size, context, permission, test_mode, verbose);
 
-    if (sptr->start_address == NULL) {
+    if (s_ptr->start_address == NULL) {
         fatal("start_address is NULL. This is a bug!.");
     }
     
     // Need threads for constant monitoring.
-    init_fam(sptr->start_address);
+    init_fam(s_ptr->start_address);
 
     print_lock_info();
 
     pthread_t monitor_thread;
     pthread_create(&monitor_thread, NULL, mon_udpate,
-        (void *) sptr->start_address);
+        (void *) s_ptr->start_address);
 
      // assume I am the FAM and lemme see the entire table.
     print_permission_table(MY_HOST_ID);

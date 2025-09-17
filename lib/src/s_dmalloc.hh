@@ -44,26 +44,45 @@
 
 // Standard definitions.
 #define ONE_G 0x40000000
+// The table size is fixed for the prototype implementation. This can
+// accomodate upto approximately 60 GiB of shared memory.
+#define TABLE_SIZE ONE_G
 
 // The final thing missing in the design is the physical address as the
 // starting address instead of virtual addresses. The driver doesn't understand
 // virtual addresses. It's the job of the middleware to create that mapping!
 #define WHERE_AM_I 0x0
 
+// We need to define the APIs that initializes the memory.
+// User-level APIs:
+//
+// secure_init -> returns pointers to the table and the data.
+dmalloc_t* secure_init(size_t size, int host_id, int permission,
+                        bool test_mode, bool verbose);
+// Driver-level API:
+// create_head -> creates the shared memory head that is aligned with the
+// data sizes.
+// Now that we have created the mmap segment, we need to create the head if we
+// are the primary host
+// void create_head(range_t range, context_t context, bool permission,
+//                                                                 bool verbose);
+                                                                
+// TODO: Marked for deletion
+// ----------------------------------------------------------------------------
 // The first function is to do a secure dmalloc on a flat region of shared
-// memory across hosts.
-dmalloc_t* secure_alloc(size_t size, context_t context, bool permission,
-                        int test_mode, bool verbose);
+// memory across hosts. 
+// dmalloc_t* secure_alloc(size_t size, context_t context, bool permission,
+                        // int test_mode, bool verbose);
+
 // TODO:
 // There is no way I can extend the permission table with my existing ptr.
 // on the existing s_ptr, there needs to be a way to extend the permission
 // table with new entries.
-void request_extension(dmalloc_t *s_ptr, int host_id, range_t range, context_t context, bool permission,
-                                                                bool verbose);
-// Now that we have created the mmap segment, we need to create the head if we
-// are the primary host
-void create_head(range_t range, context_t context, bool permission,
-                                                                bool verbose);
+// In the prototype implementation, we ignore extensions.
+// void request_extension(dmalloc_t *s_ptr, int host_id, range_t range,
+                            // context_t context, bool permission, bool verbose);
+// ----------------------------------------------------------------------------
+
 // We need a function that traps illegal accesses!
 void create_interrupt();
 // Standard dmalloc functions are defined here.

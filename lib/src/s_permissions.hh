@@ -148,7 +148,8 @@ typedef struct s_dmalloc_entry dmalloc_t;
 // FIXME:
 #define MAX_PARTICIPANT_COUNT 64
 
-#define UNUSED_SIZE 27
+// TODO: Find out why this is not 27 ????
+#define UNUSED_SIZE 19
 
 #define MAX_CONTEXT 64
 #define MAX_PROCESSES 64
@@ -156,33 +157,11 @@ typedef struct s_dmalloc_entry dmalloc_t;
 // first 128 Bytes is reserved for management.
 // All hosts can read and write into this section. For unauthorized/hogging
 // issues, it is assumed that the FAM kicks out any hoarders.
-#define TABLE_SIZE 0x40000000
+// #define TABLE_SIZE 0x40000000
 #define MAX_TABLE_ENTRIES 16777214
 
 // FAM needs to have a fixed ID. Keep this as 0 or max. This is important.
 #define FAM_ID MAX_PARTICIPANT_COUNT - 1
-// there are no offsets here, just binary bits. The entry size if 64 BYTES!
-// 64 bits per uint8_t
-// #define IS_LOCKED   0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// #define WHO_LOCKED  0b0111_1111_1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// #define PERMISSIONS 0b0000_0000_0110_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// #define PID         0b0000_0000_0001_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define HOST_MASK   0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define START       0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define END         0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define UPDATE      0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// #define VOTE_COUNT  0b0111_1111_1110_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// using 49 bits as of now.
-
-// #define START       0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define END         0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define PERMISSIONS 0b1100_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000
-// #define PID         0b0011_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-// #define HOST_MASK   0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
-
-#define PID_MASK        0b0011111111111111111111111111111111111111111111111111
-#define PERMISSION_MASK 0b1100000000000000000000000000000000000000000000000000
-#define FULL_MASK       0b1111111111111111111111111111111111111111111111111111
 
 #define START_ADDRESS 0
 
@@ -193,9 +172,11 @@ typedef struct s_dmalloc_entry dmalloc_t;
 #define PROPOSED_UPDATE (PARTICIPANT_COUNT + sizeof(int))
 #define INITIATOR (PROPOSED_UPDATE + sizeof(entry_t))
 
-#define COUNT (PROPOSED_UPDATE + sizeof(int))
+#define COUNT (INITIATOR + sizeof(int))
 #define INDEX_COUNT (COUNT + sizeof(int))
-#define PERMISSION_TABLE (INDEX_COUNT + sizeof(int))
+#define UNUSED_HEAD (INDEX_COUNT + sizeof(int))
+// to make the table cache line size aligned!
+#define PERMISSION_TABLE (UNUSED_HEAD + 40)
 
 // The FAM needs to have a fixed size of the permission table.
 #define UPDATE_RANGE (COUNT - PROPOSED_UPDATE)
@@ -214,70 +195,40 @@ enum states {
 
 // In this version, we don;t need to explicitly define a context.
 
-/* Obsolete version of the code 
-// A domain is defined as a combination of host_id and the process_id. Can also
-// the cr3.
-struct context {
-    // The host ID of the host that owns this domain. Contexts can be merged as
-    // multiple hosts can share the same range of memory. In that case, there
-    // can be at most 1 table entry with a start, size,
-    int host_id;
-    // The process ID of the process that owns this domain. In this version,
-    // we only support up to 8 processes per host. A VM ID can also be used
-    // here, but this is not implemented yet.
-    unsigned int process_id[MAX_PROCESSES];
-    // The number of valid processes must be defined! *sign* "C"
-    unsigned int valid_processes;
-};
-
-// Multiple contexts should be able to be merged into a single domain.
-struct domain {
-    int id;     // a monotonic ID of the domain
-    // XXX: This is a hardcoded value. This is the maximum number of
-    // contexts that can be merged into a single domain.
-    context_t context[MAX_CONTEXT];
-    unsigned int valid_contexts; // the number of valid contexts
-};
-
-struct range {
-    // The start address of the range in virtual addressing.
-    int* vstart;
-    // Physical address
-    Addr pstart;
-    // this size needs to be bytes.
-    size_t size;
-};
-*/
-
 // Define the structure of the permission table. this is the optimized version
 // of the permission table, which needs to be bit manipulated. This can be upto
 // 64 Bytes AKA a cache line size.
 
 // _________________________________________________________________
-// | start | end | valid bit |permissions | process_id | host_mask |
-// |______ |_____|___________|____________|____________|___________|
-// <-64b--><64b--><-----1b---><-----2b-----><---125b---><---256b--->
+// | start | end | valid/del bit |permissions | process_id | host_mask |
+// |______ |_____|_______________|____________|____________|___________|
+// <-64b--><64b--><-----2b*---><-----2b-----><---124b-----><---256b--->
 // <--------------------------- 64 Bytes -------------------------->
 
+// the prototype implementation simplifies the bit operations with primitive
+// datatypes
 struct table_entry {
-    Addr start;             // 64 bits
-    Addr end;               // 64 bits
+    Addr start;             // 64 bits              8 Bytes
+    Addr end;               // 64 bits              8 Bytes
 
-    bool is_valid;                 // 8 bits
-    int permission;             // 32 bits
+    // using this value to indicate whether to add or remove an entry!
+    int is_valid;                 // 32 bits        4 Bytes
+    int permission;                 // 32 bits      4 Bytes
 
-    uint64_t pid_mask;          // 64 bits
-    uint64_t host_mask;         // 64 bits
+    uint64_t pid_mask;          // 64 bits          8 Bytes
+    uint64_t host_mask;         // 64 bits          8 Bytes
 
-    uint8_t unused[UNUSED_SIZE];         // 216 bits
+    uint8_t unused[UNUSED_SIZE];         // 216 bits !!
 };
 
 // Define the secured structure of the pointer to the mmaped regions. This
-// structure deals purely in virtual addresses.
+// structure deals purely in virtual addresses. physical addresses are enforced
+// via the hardware.
 struct s_dmalloc_entry {
     int* start_address;
     // Metadata is located before the permission table.
     int *data_start_address;
+    // permissions on the virtual address space is pretty much meaningless.
     int permissions;
 };
 
@@ -293,21 +244,34 @@ extern int* participant_count;
 extern entry_t* proposed_update;
 extern int* initiator;
 extern int* count;
+extern char* unused_head;
 // This is a flat table of the permission entries.
 extern entry_t* permission_table;
 extern int permission_table_count;  // TOTAL entries
 extern int *permission_table_index;
 
+// finally keep a pid tracker local to the host! this needs to be kept at the
+// hardware level only. doesn't make any sense to put this in the software
+// layer!
+extern uint64_t local_pid_tracker;
+
 extern int domains;
 
 // All the functions are declared here for better book-keeping!
+
+// -------------------- user-level API ------------------------------------- //
+// A user-level API is needed to define the number of processes that can share
+// the memory. This is used to create a context for the user.
+entry_t *create_entry(Addr start, Addr end, int permission, int host_id,
+                                                    unsigned int process_id);
 
 // -------------------- initialization ------------------------------------- //
 // First we need to assign the variables to the flat memory region so that we
 // can manage this memory better. This is the management structure defined in
 // the beginning. Regardless whoami, the metadata always has read permissions
 // to any new host.
-void assign_all_global_variables(int* start_address, bool this_verbose);
+void assign_all_global_variables(int* start_address, int host_id,
+                                                            bool this_verbose);
 
 // -------------------------------- lock ----------------------------------- //
 // what's the current status of the lock?
@@ -325,16 +289,28 @@ void set_who_locked(int host_id);
 // ------------------------------ entry management ------------------------- //
 // Then we need a data writer. this function writes a given entry to the
 // `proposed_update` section
-bool write_proposed_entry(int host_id, entry_t *entry);
+bool write_proposed_entry(int host_id, entry_t *entry, bool is_del);
 // Returns the proposed entry section.
 entry_t* get_proposed_entry();
 // void set_proposed_entry(entry_t* entry);
 
 // ----------------------------- table management -------------------------- //
-// gets the permission table's head. I DONT UNDERSTAND THIS FUNCTION.
-void allocate_table();
 // We need a couple of setter and getter for the FAM also
 void populate_table_entry(int host_id, entry_t proposal);
+// How is the main permission table managed? Ideally this needs to be managed
+// by the hardware. IDK how but the secure trusted hardware needs to get
+// triggered when the votes are more than the required number of votes. If we
+// assume that the FAM node does the actual writes, then we can use the
+// folowing functions to move or remove proposed entries into the actual table.
+bool move_proposed_entry(int host_id);
+bool remove_proposed_entry(int host_id);
+// this function removes the host's access to the given range.
+bool remove_table_entry(int host_id, entry_t proposal);
+// returns a pointer to the start of the permission table.
+entry_t* get_permission_table(int host_id);
+
+int get_permission_table_index();
+void set_permission_table_index(int host_id, int table_index);
 
 // --------------------------- consensus mechanism ------------------------- //
 // We need a voter!
@@ -350,48 +326,20 @@ void reset_count();
 int get_participant_count();
 // This must be set in consensus
 void set_participant_count(int participant_count);
-// Returns the integer stored at the index offset
-// int get_participant_host_ids(size_t index);
-
-// void set_participant_host_ids(size_t index);
-
 int get_count();
 
 // Sets an integer to vote. Is in between 0 and 1.
 void set_count(int my_count);
-// returns a pointer to the start of the permission table.
-entry_t* get_permission_table(int host_id);
-entry_t* create_new_permission_entry();
 
-// A user-level API is needed to define the number of processes that can share
-// the memory. This is used to create a context for the user.
-context_t* create_context(int host_id, unsigned int* process_id,
-                          unsigned int valid_processes);
-entry_t *create_entry(Addr start, Addr end, int permission, int host_id, unsigned int process_id)
-
-// How is the main permission table managed? Ideally this needs to be managed
-// by the hardware. IDK how but the secure trusted hardware needs to get
-// triggered when the votes are more than the required number of votes. If we
-// assume that the FAM node does the actual writes, then we can use the
-// folowing functions to move or remove proposed entries into the actual table.
-bool move_proposed_entry(int host_id);
-// TODO: Marked for deletion
-bool remove_proposed_entry(int host_id);
-bool remove_table_entry(int host_id, entry_t proposal);
-
-int get_permission_table_count();
-int get_permission_table_index();
-void set_permission_table_count(int table_count);
-void set_permission_table_index(int host_id, int table_index);
-
+// ------------------------------ utility ---------------------------------- //
 // Here are couple of more utility functions that are used by the user to get
 // memory information with a more explainable way.
 void print_lock_info();
 void print_proposed_update(int host_id);
 void print_vote_count(int host_id);
 void print_permission_table(int host_id);
-void print_single_entry(entry_t* entry);
 
+// ------------------------------- FAM ------------------------------------- //
 // FAM specific functions.
 extern volatile entry_t* monitor_region;
 
@@ -403,10 +351,5 @@ void monitor_update(int host_id, int* start_address);
 void monitor_and_wait(volatile void *addr);
 
 // All function definitions are here!
-// For the cache line version, there are a couple of bitoperation functions
-
-// inline void set_start_address(size_t start) {
-
-// }
 
 #endif // __S_PERMISSIONS_HH__

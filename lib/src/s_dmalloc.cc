@@ -1,7 +1,8 @@
 #include "s_dmalloc.hh"
 
 dmalloc_t*
-secure_init(size_t size, int host_id, int test_mode, unsigned int process_id, bool this_verbose) {
+secure_init(size_t size, int host_id, int permission,
+                        bool test_mode, bool verbose) {
     // if size is 0x0 then allocate the entire /dev/dax to this host
     if (size == 0x0)
         // this needs to be hardcoded! Right now it allocates 4 GiB of memory.
@@ -11,7 +12,10 @@ secure_init(size_t size, int host_id, int test_mode, unsigned int process_id, bo
     // cannot simply read or write into the memory. the head will be visible
     // to the user if the voting goes through.
 
-    // TODO: make sure to assign the global variables correctly
+    // This is a variable stored in the local memory of the node. This is also
+    // returned to the user making sure that the copy of the permission table
+    // and the data start address is copied to the host as well.
+
     global_addr_ = (dmalloc_t *) malloc (sizeof(dmalloc_t));
     if (test_mode == 0)
         global_addr_->start_address = dmalloc(size, host_id);
@@ -35,12 +39,9 @@ secure_init(size_t size, int host_id, int test_mode, unsigned int process_id, bo
     // Since this is the first time anyone is calling this function from this
     // host, make sure that the global variables are setup and the start
     // addresses aren't passed around functions.
-    assign_all_global_variables(global_addr_->start_address, this_verbose);
 
-    // This is a variable stored in the local memory of the node. This is also
-    // returned to the user making sure that the copy of the permission table
-    // and the data start address is copied to the host as well.
-    global_addr_ = (dmalloc_t *) malloc (sizeof(dmalloc_t));
+    // TODO: make sure to assign the global variables correctly
+    assign_all_global_variables(global_addr_->start_address, host_id, verbose);
     
     // ignore this permissions
     global_addr_->permissions = 0x0;
@@ -48,9 +49,14 @@ secure_init(size_t size, int host_id, int test_mode, unsigned int process_id, bo
     // the FAM knows where does the data starts
     global_addr_->data_start_address = NULL;
 
+    // TODO:
+    // We need to increment the host count by 1. If this is already set, then
+    // do an increment. otherwise set it to 1.
+
     return global_addr_;
 }
 
+/*
 dmalloc_t*
 secure_alloc(size_t size, context_t context, bool permission, int test_mode,
                                                         bool this_verbose) {
@@ -257,7 +263,9 @@ void request_extension(dmalloc_t *s_ptr, int host_id, range_t range, context_t c
     unlock(context.host_id);
 
 }
+*/
 
+/*
 void
 create_head(range_t range, context_t context, bool permission, bool verbose) {
     // We need to make sure that the global_addr_ is not null. Why?
@@ -322,6 +330,7 @@ create_head(range_t range, context_t context, bool permission, bool verbose) {
         fatal("Cannot create head! There are others using the shared memory.");
     }
 }
+*/
 
 void
 create_interrupt() {
