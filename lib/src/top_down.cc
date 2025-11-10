@@ -40,7 +40,7 @@ int main(int argc, char **argv) {
     int host_id = MY_HOST_ID;
 
     // make sure to initializae the memory with the pid.
-    dmalloc_t *s_ptr = secure_init(size, host_id, test_mode, verbose);
+    dmalloc_t *s_ptr = secure_init(size, host_id, permission, test_mode, verbose);
     
     // if the start address is null that this will be caught in the allocation
     // files itself.
